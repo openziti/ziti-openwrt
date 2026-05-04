@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: stc
+Description: Smart Template Containers
+Version: @VERSION@
+Libs: -L${libdir} -lstc
+Cflags: -I${includedir}

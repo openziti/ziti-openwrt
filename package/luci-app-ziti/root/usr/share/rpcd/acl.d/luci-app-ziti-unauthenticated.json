@@ -1,0 +1,7 @@
+{
+	"unauthenticated": {
+		"description": "OpenZiti UI -- unauthenticated users get nothing",
+		"read": {},
+		"write": {}
+	}
+}
