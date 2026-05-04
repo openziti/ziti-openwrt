@@ -1,0 +1,124 @@
+# Build per-target .ipks and publish a signed opkg feed to gh-pages.
+#
+# Per project rule: this YAML is glue only. All build / stage / sign logic
+# lives in tools/*.sh so a maintainer can reproduce the same run locally
+# with the same env vars.
+#
+# Required repo secrets:
+#   USIGN_SECRET_KEY -- contents of build/keys/sec.key (multi-line). See
+#                       docs/feed-publishing-setup.md for first-time setup.
+#
+# GITHUB_TOKEN is provided automatically by Actions and is forwarded to the
+# gh-pages deploy step.
+
+name: publish-feed
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-sdk:
+    name: build-sdk (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64_cortex-a53, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Docker SDK image layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: sdk-${{ matrix.target }}-${{ hashFiles('tools/Dockerfile', 'tools/build-sdk.sh') }}
+
+      - name: Build ziti-edge-tunnel + llhttp9
+        run: bash tools/build-sdk.sh -p ziti-edge-tunnel -t ${{ matrix.target }}
+
+      - name: Build luci-app-ziti
+        if: matrix.target == 'aarch64_cortex-a53'
+        run: bash tools/build-sdk.sh -p luci-app-ziti -t ${{ matrix.target }}
+
+      - name: Collect openziti ipks
+        run: bash tools/collect-ipks.sh ${{ matrix.target }}
+
+      - name: Upload per-target artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipks-${{ matrix.target }}
+          path: build/collect/${{ matrix.target }}/
+
+      - name: Upload luci ipk (once)
+        if: matrix.target == 'aarch64_cortex-a53'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipks-luci
+          path: build/collect/luci/
+
+  build-router:
+    name: build-ziti-router
+    runs-on: ubuntu-latest
+    needs: build-sdk
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64_cortex-a53, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Go module cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: gomod-${{ hashFiles('tools/build-ziti-router.sh') }}
+
+      - name: Build ziti static binaries
+        run: bash tools/build-ziti-router.sh
+
+      - name: Build ziti-router .ipk for target
+        run: bash tools/build-sdk.sh -p ziti-router -t ${{ matrix.target }}
+
+      - name: Collect router ipk
+        run: bash tools/collect-ipks.sh ${{ matrix.target }}
+
+      - name: Upload router artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipks-router-${{ matrix.target }}
+          path: build/collect/${{ matrix.target }}/
+
+  publish:
+    name: publish-feed
+    runs-on: ubuntu-latest
+    needs: [build-sdk, build-router]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build/artifacts-raw
+
+      - name: Merge artifact dirs into per-target layout
+        run: bash tools/merge-artifacts.sh build/artifacts-raw build/artifacts
+
+      - name: Stage, sign, and produce feed
+        env:
+          USIGN_SECRET_KEY: ${{ secrets.USIGN_SECRET_KEY }}
+          BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          ARTIFACT_ROOT: ${{ github.workspace }}/build/artifacts
+        run: bash tools/publish-feed-ci.sh
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/feed
+          publish_branch: gh-pages
+          force_orphan: true

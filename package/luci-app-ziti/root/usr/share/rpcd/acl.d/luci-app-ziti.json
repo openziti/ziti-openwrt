@@ -1,0 +1,26 @@
+{
+	"luci-app-ziti": {
+		"description": "Grant access to manage OpenZiti via LuCI",
+		"read": {
+			"ubus": {
+				"ziti": [ "status", "list_identities" ]
+			},
+			"uci": [ "ziti" ],
+			"file": {
+				"/etc/ziti/identities/": [ "list" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"ziti": [ "enroll", "remove_identity", "service_action" ]
+			},
+			"uci": [ "ziti" ],
+			"file": {
+				"/etc/init.d/ziti-edge-tunnel restart": [ "exec" ],
+				"/etc/init.d/ziti-edge-tunnel start": [ "exec" ],
+				"/etc/init.d/ziti-edge-tunnel stop": [ "exec" ],
+				"/etc/init.d/ziti-edge-tunnel reload": [ "exec" ]
+			}
+		}
+	}
+}

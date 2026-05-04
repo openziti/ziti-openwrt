@@ -1,0 +1,39 @@
+# Tiny alpine image used by tools/publish-feed.{sh,ps1} to build an opkg
+# feed (Packages, Packages.gz, Packages.sig) from .ipk files.
+#
+# Why alpine: ships `ar` (binutils), `tar`, `gzip`, and small enough to
+# fly. usign is not in alpine's repos, so we compile it from openwrt's
+# source (~few hundred lines of C, depends only on libsodium).
+
+FROM alpine:3.20
+
+# Toolchain to compile usign from source, plus runtime tools.
+RUN apk add --no-cache \
+    bash \
+    binutils \
+    tar \
+    gzip \
+    coreutils \
+    git \
+    cmake \
+    make \
+    gcc \
+    musl-dev \
+    libsodium-dev \
+ && mkdir -p /work
+
+# Build usign from openwrt's source. usign rarely changes; we just pull
+# master. If reproducibility matters later, swap to a pinned commit via
+# `git checkout`.
+RUN git clone --depth 1 https://git.openwrt.org/project/usign.git /tmp/usign \
+ && cd /tmp/usign \
+ && cmake -B build -S . \
+ && make -C build \
+ && install -m 0755 build/usign /usr/local/bin/usign \
+ && rm -rf /tmp/usign
+
+COPY publish-feed.sh /usr/local/bin/publish-feed.sh
+RUN chmod +x /usr/local/bin/publish-feed.sh
+
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/publish-feed.sh"]

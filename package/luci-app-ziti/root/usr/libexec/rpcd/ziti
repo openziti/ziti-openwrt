@@ -1,0 +1,273 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+#
+# rpcd backend for luci-app-ziti.
+#
+# Implements the JSON-stdin/stdout protocol expected by /usr/sbin/rpcd:
+#
+#   $0 list                -> prints a JSON object describing methods
+#   $0 call <method>       -> reads JSON args from stdin, prints JSON result
+#
+# Methods:
+#   status            -> { running, version, identities[] }
+#   list_identities   -> { identities: [ { name, file, enabled, controller, status } ] }
+#   enroll            -> args: { name, jwt }   (jwt = raw JWT body as string)
+#                        Writes JWT to a private tmpfile under a root-only
+#                        directory, runs `ziti-edge-tunnel enroll`, removes
+#                        the tmpfile (always, even on failure), and on success
+#                        appends a `config identity` section to UCI.
+#   remove_identity   -> args: { name }
+#   service_action    -> args: { action: start|stop|restart|reload }
+
+set -u
+
+ZET_BIN="/usr/bin/ziti-edge-tunnel"
+IDENT_DIR="/etc/ziti/identities"
+# Private staging dir for JWTs. 0700 root:root so JWTs never touch /tmp
+# (which is tmpfs but world-readable on default OpenWRT).
+JWT_STAGE_DIR="/etc/ziti/.jwt-stage"
+
+# ---------- helpers ----------
+
+json_escape() {
+	# Minimal JSON string escape for shell-built strings.
+	awk 'BEGIN{
+		s=""
+		while ((getline line) > 0) {
+			if (s != "") s = s "\\n"
+			gsub(/\\/, "\\\\", line)
+			gsub(/"/, "\\\"", line)
+			gsub(/\t/, "\\t", line)
+			gsub(/\r/, "", line)
+			s = s line
+		}
+		print s
+	}'
+}
+
+emit_error() {
+	# emit_error "code" "message"
+	printf '{"error":{"code":"%s","message":"%s"}}\n' "$1" "$2"
+}
+
+read_stdin_json() {
+	# slurp stdin; callers parse with jsonfilter
+	cat
+}
+
+ensure_dirs() {
+	[ -d "$IDENT_DIR" ] || mkdir -p "$IDENT_DIR"
+	chmod 0700 "$IDENT_DIR" 2>/dev/null || true
+	[ -d "$JWT_STAGE_DIR" ] || mkdir -p "$JWT_STAGE_DIR"
+	chmod 0700 "$JWT_STAGE_DIR" 2>/dev/null || true
+}
+
+# ---------- methods ----------
+
+method_status() {
+	local running=0 version="" pid=""
+	pid="$(pidof ziti-edge-tunnel 2>/dev/null || true)"
+	[ -n "$pid" ] && running=1
+
+	if [ -x "$ZET_BIN" ]; then
+		version="$($ZET_BIN version 2>/dev/null | head -n1 | tr -d '\r\n')"
+	fi
+
+	# Build identities array from UCI.
+	local idents="["
+	local first=1
+	local sect_count
+	sect_count=$(uci -q show ziti 2>/dev/null | grep -c '=identity$' || echo 0)
+	if [ "$sect_count" -gt 0 ]; then
+		local i=0
+		while [ $i -lt "$sect_count" ]; do
+			local n f e
+			n=$(uci -q get "ziti.@identity[$i].name" 2>/dev/null)
+			f=$(uci -q get "ziti.@identity[$i].file" 2>/dev/null)
+			e=$(uci -q get "ziti.@identity[$i].enabled" 2>/dev/null)
+			[ -z "$e" ] && e=1
+			[ $first -eq 0 ] && idents="$idents,"
+			idents="$idents{\"name\":\"$n\",\"file\":\"$f\",\"enabled\":$e,\"controller\":\"\",\"status\":\"unknown\"}"
+			first=0
+			i=$((i+1))
+		done
+	fi
+	idents="$idents]"
+
+	printf '{"running":%d,"version":"%s","identities":%s}\n' "$running" "$version" "$idents"
+}
+
+method_list_identities() {
+	local idents="["
+	local first=1
+	local sect_count i=0
+	sect_count=$(uci -q show ziti 2>/dev/null | grep -c '=identity$' || echo 0)
+	while [ $i -lt "$sect_count" ]; do
+		local n f e
+		n=$(uci -q get "ziti.@identity[$i].name" 2>/dev/null)
+		f=$(uci -q get "ziti.@identity[$i].file" 2>/dev/null)
+		e=$(uci -q get "ziti.@identity[$i].enabled" 2>/dev/null)
+		[ -z "$e" ] && e=1
+		[ $first -eq 0 ] && idents="$idents,"
+		idents="$idents{\"name\":\"$n\",\"file\":\"$f\",\"enabled\":$e}"
+		first=0
+		i=$((i+1))
+	done
+	idents="$idents]"
+	printf '{"identities":%s}\n' "$idents"
+}
+
+method_enroll() {
+	local args name jwt
+	args="$(read_stdin_json)"
+	name=$(printf '%s' "$args" | jsonfilter -e '@.name' 2>/dev/null)
+	jwt=$(printf  '%s' "$args" | jsonfilter -e '@.jwt'  2>/dev/null)
+
+	if [ -z "$name" ] || [ -z "$jwt" ]; then
+		emit_error "invalid_args" "name and jwt required"
+		return
+	fi
+
+	# Validate name -- only alnum, dash, underscore. Prevents path traversal.
+	case "$name" in
+		*[!A-Za-z0-9_-]*|"") emit_error "invalid_args" "invalid identity name"; return;;
+	esac
+
+	if [ ! -x "$ZET_BIN" ]; then
+		emit_error "missing_binary" "ziti-edge-tunnel not installed"
+		return
+	fi
+
+	ensure_dirs
+
+	local out_file="$IDENT_DIR/$name.json"
+	if [ -e "$out_file" ]; then
+		emit_error "exists" "identity already exists"
+		return
+	fi
+
+	# Write JWT to a private staging file. mktemp on busybox supports -p.
+	local jwt_file
+	jwt_file="$(mktemp -p "$JWT_STAGE_DIR" jwt.XXXXXX)" || {
+		emit_error "io_error" "cannot create staging file"
+		return
+	}
+	chmod 0600 "$jwt_file" 2>/dev/null || true
+
+	# Always wipe the JWT file, even on early exit / failure.
+	# JWTs are one-time-use enrollment secrets and must not persist.
+	trap 'rm -f "$jwt_file" 2>/dev/null || true' EXIT INT TERM
+
+	printf '%s' "$jwt" > "$jwt_file"
+
+	local logfile
+	logfile="$(mktemp -p "$JWT_STAGE_DIR" enroll.log.XXXXXX)"
+	"$ZET_BIN" enroll --jwt "$jwt_file" --identity "$out_file" >"$logfile" 2>&1
+	local rc=$?
+
+	# Best-effort overwrite then remove (defense in depth on flash filesystems
+	# where deletion alone may not free the underlying blocks immediately).
+	dd if=/dev/zero of="$jwt_file" bs=1 count=1 conv=notrunc 2>/dev/null || true
+	rm -f "$jwt_file"
+
+	if [ $rc -ne 0 ] || [ ! -s "$out_file" ]; then
+		local msg
+		msg=$(json_escape < "$logfile")
+		rm -f "$logfile"
+		emit_error "enroll_failed" "$msg"
+		return
+	fi
+	rm -f "$logfile"
+
+	chmod 0600 "$out_file" 2>/dev/null || true
+
+	# Append UCI identity section.
+	local sid
+	sid=$(uci add ziti identity 2>/dev/null) || {
+		emit_error "uci_error" "uci add failed"
+		return
+	}
+	uci set "ziti.$sid.name=$name"
+	uci set "ziti.$sid.file=$out_file"
+	uci set "ziti.$sid.enabled=1"
+	uci commit ziti
+
+	printf '{"ok":true,"name":"%s","file":"%s"}\n' "$name" "$out_file"
+}
+
+method_remove_identity() {
+	local args name
+	args="$(read_stdin_json)"
+	name=$(printf '%s' "$args" | jsonfilter -e '@.name' 2>/dev/null)
+	case "$name" in
+		*[!A-Za-z0-9_-]*|"") emit_error "invalid_args" "invalid identity name"; return;;
+	esac
+
+	# Find matching UCI section by name.
+	local i=0 found=0 sect_count
+	sect_count=$(uci -q show ziti 2>/dev/null | grep -c '=identity$' || echo 0)
+	while [ $i -lt "$sect_count" ]; do
+		local n
+		n=$(uci -q get "ziti.@identity[$i].name" 2>/dev/null)
+		if [ "$n" = "$name" ]; then
+			uci delete "ziti.@identity[$i]"
+			found=1
+			break
+		fi
+		i=$((i+1))
+	done
+	uci commit ziti
+
+	rm -f "$IDENT_DIR/$name.json"
+
+	if [ $found -eq 1 ]; then
+		printf '{"ok":true}\n'
+	else
+		emit_error "not_found" "no such identity"
+	fi
+}
+
+method_service_action() {
+	local args action
+	args="$(read_stdin_json)"
+	action=$(printf '%s' "$args" | jsonfilter -e '@.action' 2>/dev/null)
+	case "$action" in
+		start|stop|restart|reload) ;;
+		*) emit_error "invalid_args" "bad action"; return;;
+	esac
+	if [ ! -x /etc/init.d/ziti-edge-tunnel ]; then
+		emit_error "no_init" "ziti-edge-tunnel init script missing"
+		return
+	fi
+	/etc/init.d/ziti-edge-tunnel "$action" >/dev/null 2>&1
+	printf '{"ok":true,"action":"%s"}\n' "$action"
+}
+
+# ---------- dispatch ----------
+
+case "${1:-}" in
+	list)
+		cat <<'EOF'
+{
+	"status":           { },
+	"list_identities":  { },
+	"enroll":           { "name": "", "jwt": "" },
+	"remove_identity":  { "name": "" },
+	"service_action":   { "action": "" }
+}
+EOF
+		;;
+	call)
+		case "${2:-}" in
+			status)          method_status ;;
+			list_identities) method_status ;;
+			enroll)          method_enroll ;;
+			remove_identity) method_remove_identity ;;
+			service_action)  method_service_action ;;
+			*)               emit_error "no_method" "unknown method" ;;
+		esac
+		;;
+	*)
+		emit_error "usage" "expected: list | call <method>"
+		;;
+esac

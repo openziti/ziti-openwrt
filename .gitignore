@@ -1,0 +1,13 @@
+build/
+*.ipk
+.DS_Store
+Thumbs.db
+
+# Locally-built ziti router binaries (~70 MB each). Produced by
+# tools/build-ziti-router.sh into package/ziti-router/files/binaries/.
+# Don't commit -- consumers either build them themselves or fetch them
+# from a feed.
+package/ziti-router/files/binaries/
+
+# Temporary parse-check / sanity scripts
+tools/.cache/

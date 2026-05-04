@@ -1,0 +1,2 @@
+# Keep /etc/ziti/ in source tree. NOT shipped to the device -- the Makefile
+# creates the directory at install time via INSTALL_DIR.

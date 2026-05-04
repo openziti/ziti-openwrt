@@ -1,0 +1,3 @@
+# Keep /etc/ziti/identities/ in source tree. NOT shipped to the device --
+# the Makefile creates the directory at install time via INSTALL_DIR and
+# tightens its permissions in postinst.

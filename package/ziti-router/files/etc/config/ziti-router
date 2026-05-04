@@ -1,0 +1,4 @@
+
+config router 'main'
+	option enabled '0'
+	option config '/etc/ziti/router/config.yml'

@@ -1,0 +1,21 @@
+#
+# OpenZiti UCI config.
+#
+# Tunable globals live under config ziti 'main'. Per-identity disable
+# is done by renaming the identity JSON to <name>.json.disabled in
+# /etc/ziti/identities/ -- the init script only loads files ending in
+# .json. The config identity sections below are informational; the
+# init script does not iterate them today.
+#
+
+config ziti 'main'
+	option enabled '1'
+	option log_level 'INFO'
+
+# Example -- gets written automatically by the LuCI Identities tab on
+# successful enroll, OR you can hand-edit after a CLI enroll:
+#
+# config identity
+#	option name 'home'
+#	option file '/etc/ziti/identities/home.json'
+#	option enabled '1'

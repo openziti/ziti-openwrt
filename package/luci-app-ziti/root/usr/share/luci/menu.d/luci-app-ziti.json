@@ -1,0 +1,48 @@
+{
+	"admin/services/ziti": {
+		"title": "OpenZiti",
+		"order": 60,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-ziti" ]
+		}
+	},
+
+	"admin/services/ziti/status": {
+		"title": "Status",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "ziti/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-ziti" ]
+		}
+	},
+
+	"admin/services/ziti/identities": {
+		"title": "Identities",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "ziti/identities"
+		},
+		"depends": {
+			"acl": [ "luci-app-ziti" ]
+		}
+	},
+
+	"admin/services/ziti/settings": {
+		"title": "Settings",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "ziti/settings"
+		},
+		"depends": {
+			"acl": [ "luci-app-ziti" ]
+		}
+	}
+}
