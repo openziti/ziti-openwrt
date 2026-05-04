@@ -24,6 +24,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FEED_PATH="$REPO_ROOT/package"
 OUT_DIR="$REPO_ROOT/build/$TARGET"
 mkdir -p "$OUT_DIR"
+# The SDK container runs as uid 1000 (builder); on Linux Docker the host
+# uid is preserved, so a dir owned by host uid 1001 (typical CI runner) is
+# unwritable to container uid 1000. Open it for the container to write
+# .ipks back into. Local Docker Desktop on Windows hides this with uid
+# translation; Linux runners do not.
+chmod 0777 "$OUT_DIR"
 
 # Default SDK URL mapping (mirrors build-sdk.ps1's table; trim as needed).
 if [ -z "$SDK_URL" ]; then
