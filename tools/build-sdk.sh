@@ -96,6 +96,13 @@ mkdir -p /out
 find bin/ -name "*.ipk" -print -exec cp {} /out/ \;
 EOF
 
+# mktemp creates the file mode 0600 owned by the host user. The SDK image
+# runs the inner script as the unprivileged 'builder' user (uid 1000), and
+# on Linux Docker the host uid is preserved -- so a 0600 file owned by
+# host uid 1001 (typical CI runner) is unreadable to container uid 1000.
+# Make it world-readable. The contents are not secret.
+chmod 0644 "$TMP_INNER"
+
 echo "==> Running build in container"
 docker run --rm \
   -v "$FEED_PATH:/feed:ro" \
