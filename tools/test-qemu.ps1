@@ -342,8 +342,8 @@ try {
         return [pscustomobject]@{ Status='failed'; Message='no pid and no "no identities" log line'; Output=$log.StdOut }
     }
 
-    # ---- smoke check: tun0 (only if identities present) -------------------
-    Invoke-SmokeCheck -Name 'ziti-edge-tunnel.tun0' -Body {
+    # ---- smoke check: ziti0 (only if identities present) -------------------
+    Invoke-SmokeCheck -Name 'ziti-edge-tunnel.ziti0' -Body {
         $idCheck = Invoke-SshCommand -TargetHost $VmHost -Port $SshPort -User $VmUser `
             -KeyPath $SshKey -Command 'ls /etc/ziti/identities 2>/dev/null | wc -l'
         $count = 0
@@ -352,9 +352,9 @@ try {
             return [pscustomobject]@{ Status='skipped'; Message='no identities configured'; Output='' }
         }
         $r = Invoke-SshCommand -TargetHost $VmHost -Port $SshPort -User $VmUser `
-            -KeyPath $SshKey -Command 'ip link show tun0'
+            -KeyPath $SshKey -Command 'ip link show ziti0'
         if ($r.ExitCode -ne 0) {
-            return [pscustomobject]@{ Status='failed'; Message='tun0 missing'; Output=$r.StdOut + $r.StdErr }
+            return [pscustomobject]@{ Status='failed'; Message='ziti0 missing'; Output=$r.StdOut + $r.StdErr }
         }
         return [pscustomobject]@{ Status='passed'; Output=$r.StdOut }
     }

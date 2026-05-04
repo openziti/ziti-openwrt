@@ -32,13 +32,6 @@ return view.extend({
 		o.value('TRACE',   'TRACE');
 		o.default = 'INFO';
 
-		o = s.option(form.ListValue, 'mode', _('Mode'),
-			_('tunnel = host-mode/edge tunnel only; router = run ziti-router; both = run both side by side.'));
-		o.value('tunnel', _('tunnel (ziti-edge-tunnel)'));
-		o.value('router', _('router (ziti-router)'));
-		o.value('both',   _('both'));
-		o.default = 'tunnel';
-
 		return m.render();
 	}
 });

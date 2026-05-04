@@ -93,7 +93,24 @@ until ./scripts/feeds update -a; do
   rm -rf feeds
   sleep \$((attempt * 5))
 done
-./scripts/feeds install -a
+# Install only the feeds we need: local (this repo's packages) and base
+# (libuv, libopenssl, etc. for ZET runtime deps). We do NOT install
+# packages, luci, telephony, or routing -- those would pull in 200+
+# unrelated .ipks during make defconfig.
+./scripts/feeds install -p local -a
+./scripts/feeds install -p base -a
+# Allow individual deps from packages/luci feeds without enabling them
+# wholesale.
+./scripts/feeds install libsodium libprotobuf-c libpcap libuv libjson-c llhttp stc luci-base 2>/dev/null || true
+
+# Start from an empty .config so make defconfig only enables what our
+# package selects via DEPENDS (and the SDK target itself).
+: > .config
+echo "CONFIG_ALL=n" >> .config
+echo "CONFIG_ALL_KMODS=n" >> .config
+echo "CONFIG_ALL_NONSHARED=n" >> .config
+echo "CONFIG_AUTOREMOVE=y" >> .config
+echo "CONFIG_PACKAGE_$PACKAGE=m" >> .config
 
 make defconfig
 make package/$PACKAGE/compile V=s -j"\$(nproc)"
