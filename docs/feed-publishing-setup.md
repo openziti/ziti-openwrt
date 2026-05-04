@@ -50,10 +50,17 @@ docker run --rm \
 
 ## Step 3 -- Add the secret key as a GitHub Actions repo secret
 
+The secret is stored base64-encoded to dodge GitHub's multi-line textarea quirks. Get the encoded value:
+
+```bash
+base64 -w0 build/keys/sec.key
+```
+
+(PowerShell: `[Convert]::ToBase64String((Get-Content -AsByteStream build/keys/sec.key))`.)
+
 1. In the GitHub repo, go to **Settings -> Secrets and variables -> Actions -> New repository secret**.
 2. Name: `USIGN_SECRET_KEY`.
-3. Value: paste the full contents of `build/keys/sec.key` (it is a short multi-line file; paste verbatim,
-   including any trailing newline).
+3. Value: paste the base64 string from the command above.
 4. Save.
 
 The publish job is the only job that consumes this secret. The `build-sdk` and `build-router` jobs do not
