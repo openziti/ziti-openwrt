@@ -104,9 +104,8 @@ sign_arg=()
 if [ -n "${USIGN_SECRET_KEY:-}" ]; then
     mkdir -p "$KEYS_DIR"
     umask 077
-    printf '%s\n' "$USIGN_SECRET_KEY" > "$SECRET_KEY_FILE"
+    printf '%s' "$USIGN_SECRET_KEY" | base64 -d > "$SECRET_KEY_FILE"
     sign_arg=(-v "$SECRET_KEY_FILE:/keys/sec.key:ro" -e "SIGN_KEY=/keys/sec.key")
-    echo "==> Signing key materialized at $SECRET_KEY_FILE (mode 0600)"
 else
     echo "WARN: USIGN_SECRET_KEY not set; feed will be UNSIGNED" >&2
 fi
