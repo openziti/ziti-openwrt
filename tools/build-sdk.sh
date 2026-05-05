@@ -113,23 +113,7 @@ until ./scripts/feeds update -a; do
   sleep \$((attempt * 5))
 done
 
-# scripts/feeds install invokes make under the hood, which falls back to
-# menuconfig (and dies in CI with "Error opening terminal") if .config is
-# missing. Write our minimal .config FIRST so that does not happen.
-# CONFIG_ALL*=n keeps make defconfig from enabling 200 unrelated packages.
-: > .config
-echo "CONFIG_ALL=n" >> .config
-echo "CONFIG_ALL_KMODS=n" >> .config
-echo "CONFIG_ALL_NONSHARED=n" >> .config
-echo "CONFIG_AUTOREMOVE=y" >> .config
-echo "CONFIG_PACKAGE_$PACKAGE=m" >> .config
-
-# Selective feeds install: local + base + named individual deps. The
-# wholesale `feeds install -a` would pull in packages, luci, routing,
-# telephony entries we never use.
-./scripts/feeds install -p local -a
-./scripts/feeds install -p base -a
-./scripts/feeds install libsodium libprotobuf-c libpcap libuv libjson-c llhttp stc luci-base 2>/dev/null || true
+./scripts/feeds install -a
 
 make defconfig
 make package/$PACKAGE/compile V=s -j"\$(nproc)"
