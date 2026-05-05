@@ -24,6 +24,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FEED_PATH="$REPO_ROOT/package"
 OUT_DIR="$REPO_ROOT/build/$TARGET"
 mkdir -p "$OUT_DIR"
+
+# Optional persistent feeds cache. CI sets FEEDS_CACHE_DIR to a path that
+# actions/cache@v4 saves between runs, so feeds update only does a git pull
+# instead of a full clone (~3-5 min savings per leg).
+FEEDS_CACHE_DIR="${FEEDS_CACHE_DIR:-}"
+FEEDS_MOUNT_ARG=()
+if [ -n "$FEEDS_CACHE_DIR" ]; then
+  mkdir -p "$FEEDS_CACHE_DIR"
+  chmod 0777 "$FEEDS_CACHE_DIR"
+  FEEDS_MOUNT_ARG=(-v "$FEEDS_CACHE_DIR:/home/builder/sdk/feeds")
+fi
 # The SDK container runs as uid 1000 (builder); on Linux Docker the host
 # uid is preserved, so a dir owned by host uid 1001 (typical CI runner) is
 # unwritable to container uid 1000. Open it for the container to write
@@ -81,7 +92,9 @@ cd /home/builder/sdk
   cat feeds.conf.default
 } > feeds.conf
 
-# Retry feeds update -- git.openwrt.org TLS is flaky.
+# Retry feeds update -- git.openwrt.org TLS is flaky. Clear feeds CONTENTS
+# rather than the directory itself; in CI the dir may be a bind-mount from
+# the host-side actions cache and rm-ing the mount point fails.
 attempt=0
 until ./scripts/feeds update -a; do
   attempt=\$((attempt + 1))
@@ -90,7 +103,7 @@ until ./scripts/feeds update -a; do
     exit 1
   fi
   echo "feeds update attempt \$attempt failed; retrying after \$((attempt * 5))s" >&2
-  rm -rf feeds
+  ( cd feeds && rm -rf -- * .[!.]* ..?* 2>/dev/null || true )
   sleep \$((attempt * 5))
 done
 # Install only the feeds we need: local (this repo's packages) and base
@@ -131,6 +144,7 @@ docker run --rm \
   -v "$FEED_PATH:/feed:ro" \
   -v "$OUT_DIR:/out" \
   -v "$TMP_INNER:/tmp/build-inner.sh:ro" \
+  "${FEEDS_MOUNT_ARG[@]}" \
   "$IMAGE_TAG" \
   bash /tmp/build-inner.sh
 
