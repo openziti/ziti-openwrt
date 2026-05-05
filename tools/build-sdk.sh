@@ -87,6 +87,12 @@ cat > "$TMP_INNER" <<EOF
 set -euo pipefail
 cd /home/builder/sdk
 
+# When CI restores feeds/ from actions/cache, files come back owned by the
+# runner uid (1001), but this container runs as builder (1000). Modern
+# git refuses to operate on "foreign-owned" repos with "dubious ownership".
+# Whitelist all paths since this container's lifetime is single-job.
+git config --global --add safe.directory '*'
+
 {
   echo "src-link local /feed"
   cat feeds.conf.default
