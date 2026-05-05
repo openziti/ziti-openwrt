@@ -141,5 +141,12 @@ else
     echo "WARN: $PUB_KEY_FILE not found; feed root will not contain pub.key" >&2
 fi
 
+# Render the landing page with BASE_URL substituted in.
+INDEX_TEMPLATE="$SCRIPT_DIR/feed-index.html.template"
+if [ -f "$INDEX_TEMPLATE" ]; then
+    sed "s|@@BASE_URL@@|${BASE_URL%/}|g" "$INDEX_TEMPLATE" > "$FEED_OUT/index.html"
+    echo "==> Published index.html"
+fi
+
 echo "==> Feed produced at $FEED_OUT"
 ls -la "$FEED_OUT"
