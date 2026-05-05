@@ -30,10 +30,8 @@ return view.extend({
 	},
 
 	doEnroll: function (name, jwt) {
-		if (!name || !jwt) {
-			ui.addNotification(null, E('p', _('Name and JWT are required.')), 'warning');
-			return;
-		}
+		// Caller validates inputs; this is defense-in-depth.
+		if (!name || !jwt) return Promise.resolve();
 		ui.showModal(_('Enrolling...'), [
 			E('p', { 'class': 'spinning' }, _('Contacting controller and writing identity.'))
 		]);
@@ -140,6 +138,16 @@ return view.extend({
 			'click': ui.createHandlerFn(self, function () {
 				var name = (nameInput.value || '').trim();
 				var jwt  = (jwtArea.value  || '').trim();
+				if (!name || !/^[A-Za-z0-9_-]+$/.test(name)) {
+					ui.addNotification(null, E('p',
+						_('Identity name is required (letters, digits, _ or - only).')), 'warning');
+					return Promise.resolve();
+				}
+				if (!jwt) {
+					ui.addNotification(null, E('p',
+						_('JWT contents are required.')), 'warning');
+					return Promise.resolve();
+				}
 				return self.doEnroll(name, jwt).finally(function () {
 					// Best-effort scrub of the in-DOM JWT.
 					jwtArea.value = '';

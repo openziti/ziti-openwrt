@@ -139,7 +139,7 @@ during the integration pass:
 QEMU x86_64 smoke (`tools/test-qemu.ps1`) green = packages install on a real
 OpenWRT rootfs, depends resolve, init scripts enable cleanly, LuCI menu loads,
 binary links and prints version. It does **not** exercise enrollment, data
-plane, DNS interception, tproxy rules, or `tun0` traffic -- those need a live
+plane, DNS interception, tproxy rules, or `ziti0` traffic -- those need a live
 controller and JWT, which CI does not have.
 
 ## Build commands
