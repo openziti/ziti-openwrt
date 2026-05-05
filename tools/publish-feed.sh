@@ -61,8 +61,10 @@ repack_ipk() {
     fi
     sed -i "s/^Architecture: ${src_arch}\$/Architecture: ${dst_arch}/" "$tmp/ctrl/control"
     tar -czf "$tmp/control.tar.gz" -C "$tmp/ctrl" . --owner=0 --group=0
-    # Re-roll outer tar. Modern OpenWRT format: gzipped tar of the three members.
-    tar -czf "$dst" -C "$tmp" debian-binary control.tar.gz data.tar.gz --owner=0 --group=0
+    # Re-roll outer tar with ./ prefixes so the entry names match what
+    # ipkg-build produces (./debian-binary, ./control.tar.gz, ./data.tar.gz).
+    # emit_stanza extracts via the dotted path.
+    tar -czf "$dst" -C "$tmp" ./debian-binary ./control.tar.gz ./data.tar.gz --owner=0 --group=0
     rm -rf "$tmp"
 }
 
