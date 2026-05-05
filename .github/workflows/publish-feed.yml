@@ -48,23 +48,11 @@ jobs:
         if: steps.docker-cache.outputs.cache-hit == 'true'
         run: docker load -i /tmp/sdk-image.tar
 
-      - name: Cache OpenWRT feeds clone
-        uses: actions/cache@v4
-        with:
-          path: build/sdk-feeds
-          key: feeds-${{ hashFiles('tools/Dockerfile') }}-${{ github.run_id }}
-          restore-keys: |
-            feeds-${{ hashFiles('tools/Dockerfile') }}-
-
       - name: Build ziti-edge-tunnel + llhttp9
-        env:
-          FEEDS_CACHE_DIR: ${{ github.workspace }}/build/sdk-feeds
         run: bash tools/build-sdk.sh -p ziti-edge-tunnel -t ${{ matrix.target }}
 
       - name: Build luci-app-ziti
         if: matrix.target == 'aarch64_cortex-a53'
-        env:
-          FEEDS_CACHE_DIR: ${{ github.workspace }}/build/sdk-feeds
         run: bash tools/build-sdk.sh -p luci-app-ziti -t ${{ matrix.target }}
 
       - name: Save Docker image to cache
@@ -130,14 +118,6 @@ jobs:
       - name: Load Docker image
         run: test -f /tmp/sdk-image.tar && docker load -i /tmp/sdk-image.tar || true
 
-      - name: Cache OpenWRT feeds clone
-        uses: actions/cache@v4
-        with:
-          path: build/sdk-feeds
-          key: feeds-${{ hashFiles('tools/Dockerfile') }}-${{ github.run_id }}
-          restore-keys: |
-            feeds-${{ hashFiles('tools/Dockerfile') }}-
-
       - name: Download router binaries
         uses: actions/download-artifact@v4
         with:
@@ -145,8 +125,6 @@ jobs:
           path: package/ziti-router/files/binaries/
 
       - name: Build ziti-router .ipk for target
-        env:
-          FEEDS_CACHE_DIR: ${{ github.workspace }}/build/sdk-feeds
         run: bash tools/build-sdk.sh -p ziti-router -t ${{ matrix.target }}
 
       - name: Collect router ipk
