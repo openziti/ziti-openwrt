@@ -1,11 +1,42 @@
-# Installing OpenZiti on GL.iNet (QSDK) devices
+# Installing OpenZiti on GL.iNet devices
 
-Step-by-step recipe for getting `ziti-edge-tunnel` (ZET) and `luci-app-ziti` running on a GL.iNet router whose
-firmware is built from Qualcomm's QSDK rather than vanilla OpenWRT. Verified end-to-end on a **GL-BE3600**
-(IPQ5332, aarch64 Cortex-A53, "OpenWrt 23.05-SNAPSHOT" banner, `qsdk_v12.5` feeds). The same procedure should
-apply to other GL.iNet IPQ53xx / IPQ807x devices that report `aarch64_cortex-a53_neon-vfpv4` from
-`opkg print-architecture` (e.g. GL-MT6000-class boards on similar QSDK builds -- adjust arch tag to match what
-your device reports).
+Step-by-step recipe for getting `ziti-edge-tunnel` (ZET) and `luci-app-ziti` running on a GL.iNet router. Verified
+end-to-end on a **GL-BE3600** (IPQ5332, `aarch64_cortex-a53_neon-vfpv4`, GL.iNet firmware 4.7+ on a 23.05-SNAPSHOT
+base). The repository publishes ipks for several arches so most current GL.iNet devices are covered without a
+local build.
+
+## Supported devices
+
+**Firmware requirement:** GL.iNet firmware 4.5 or later (which is OpenWRT 23.05-based). Older firmware lines
+(4.4 and below, on OpenWRT 21.02 / 22.03) are **not supported** -- libopenssl ABI is incompatible. If your device
+is end-of-life on GL.iNet's update roadmap and stuck below 4.5, this feed will not work for you. Check
+**Admin Panel -> System -> Firmware** for your current version.
+
+Find your device's arch tag by SSH'ing in and running:
+
+```sh
+opkg print-architecture | awk '{print $2}'
+```
+
+Use the row in the table that matches the most-specific arch your device reports (the last line of the output is
+usually the right one):
+
+| Arch tag your device reports | Example GL.iNet devices | Feed subdirectory |
+|---|---|---|
+| `aarch64_cortex-a53_neon-vfpv4` | GL-BE3600, GL-MT6000, GL-AXT1800, GL-MT3000 (IPQ50xx/60xx/80xx) | `aarch64_cortex-a53_neon-vfpv4/` |
+| `aarch64_cortex-a53` | Vanilla 23.05 ARM SBCs, generic mvebu | `aarch64_cortex-a53/` |
+| `arm_cortex-a7_neon-vfpv4` | GL-B1300, GL-AP1300, GL-S1300 (IPQ4018/4019) | `arm_cortex-a7_neon-vfpv4/` (experimental, see below) |
+| `mipsel_24kc` | GL-MT1300, GL-AR750S, GL-X750, GL-AR300M (newer rev) (MT7621) | `mipsel_24kc/` (experimental, see below) |
+| `x86_64` | x86 OpenWRT, QEMU smoke target | `x86_64/` |
+
+The 32-bit arches (`arm_cortex-a7_neon-vfpv4`, `mipsel_24kc`) are flagged experimental: the build is wired up but
+not validated on a live device yet. Open an issue if it works for you (or if it doesn't). The router package
+(`ziti-router`) is **not** built for these arches -- the Go binary is too large for the typical 16 MB flash budget
+on those devices and the static-build flow assumes aarch64/x86_64. ZET + LuCI work fine.
+
+If your device's reported arch isn't in the table above, the closest match probably works (the binary is the
+same; the label is what `opkg` checks). Open an issue with the output of `opkg print-architecture` and we'll add
+a server-side repack rule.
 
 If you're on a vanilla OpenWRT device (arch tag `aarch64_cortex-a53`, no `_neon-vfpv4` suffix) follow
 `docs/installing.md` instead. You don't need anything in this file.

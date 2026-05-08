@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo \
     swig \
     time \
+    zstd \
  && rm -rf /var/lib/apt/lists/*
 
 # Non-root build user (OpenWRT SDK refuses to build as root).
@@ -58,10 +59,10 @@ ENV OPENWRT_TARGET=${OPENWRT_TARGET}
 ENV OPENWRT_SDK_URL=${OPENWRT_SDK_URL}
 
 RUN echo "Downloading SDK from: ${OPENWRT_SDK_URL}" \
- && wget -q -O /tmp/sdk.tar.xz "${OPENWRT_SDK_URL}" \
+ && wget -q -O /tmp/sdk.archive "${OPENWRT_SDK_URL}" \
  && mkdir -p /home/builder/sdk \
- && tar -xJf /tmp/sdk.tar.xz -C /home/builder/sdk --strip-components=1 \
- && rm /tmp/sdk.tar.xz
+ && tar -xf /tmp/sdk.archive -C /home/builder/sdk --strip-components=1 \
+ && rm /tmp/sdk.archive
 
 WORKDIR /home/builder/sdk
 

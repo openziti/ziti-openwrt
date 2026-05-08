@@ -44,6 +44,14 @@ if [ -z "$SDK_URL" ]; then
     x86_64)
       SDK_URL="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64/openwrt-sdk-${OPENWRT_VERSION}-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
       ;;
+    arm_cortex-a7_neon-vfpv4)
+      # GL.iNet IPQ4018/4019 boards: GL-B1300, GL-AP1300, GL-S1300.
+      SDK_URL="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/ipq40xx/generic/openwrt-sdk-${OPENWRT_VERSION}-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+      ;;
+    mipsel_24kc)
+      # GL.iNet MT7621 boards: GL-MT1300, GL-AR750S, GL-X750, GL-AR300M (newer rev).
+      SDK_URL="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/ramips/mt7621/openwrt-sdk-${OPENWRT_VERSION}-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+      ;;
     *)
       echo "no default SDK URL for target=$TARGET; pass -u" >&2
       exit 2

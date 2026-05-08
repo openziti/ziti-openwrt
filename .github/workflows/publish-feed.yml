@@ -30,10 +30,20 @@ jobs:
   build-sdk:
     name: build-sdk (${{ matrix.target }})
     runs-on: ubuntu-latest
+    # New arches (arm_cortex-a7_neon-vfpv4, mipsel_24kc) are unverified --
+    # mark them experimental so a build failure on those does not block the
+    # feed publish for the proven targets.
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64_cortex-a53, x86_64]
+        include:
+          - target: aarch64_cortex-a53
+          - target: x86_64
+          - target: arm_cortex-a7_neon-vfpv4
+            experimental: true
+          - target: mipsel_24kc
+            experimental: true
     steps:
       - uses: actions/checkout@v4
 

@@ -25,6 +25,12 @@ tag does not match what `opkg print-architecture` reports.
 | `aarch64_cortex-a53` | mvebu Cortex-A53 (GL-MV1000, NanoPi R2S, FriendlyELEC NEO3, ESPRESSObin, MACCHIATObin) | Native build |
 | `aarch64_cortex-a53_neon-vfpv4` | GL.iNet QSDK (GL-BE3600, GL-MT6000, GL-AXT1800) | Repacked control tag, same binary |
 | `x86_64` | OpenWRT x86_64 routers and VMs | Native build |
+| `arm_cortex-a7_neon-vfpv4` | GL.iNet IPQ4018/4019 (GL-B1300, GL-AP1300, GL-S1300) | Native build (experimental, ZET + LuCI only) |
+| `mipsel_24kc` | GL.iNet MT7621 (GL-MT1300, GL-AR750S, GL-X750, GL-AR300M v2) | Native build (experimental, ZET + LuCI only) |
+
+The `_experimental_` tags are wired up but not yet validated on hardware. `ziti-router` is excluded on those
+arches via `DEPENDS:=@(aarch64||x86_64)` -- the Go binary is too large for typical 16 MB flash budgets and the
+self-built flow only cross-compiles arm64 + amd64.
 
 ### Could-work, not shipped yet
 
