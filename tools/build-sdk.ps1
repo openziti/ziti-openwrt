@@ -201,11 +201,16 @@ $tmpScript = Join-Path $env:TEMP "openwrt-openziti-build-$([Guid]::NewGuid().ToS
 
 try {
     Write-Host "==> Running build in container"
+    # Docker Desktop on Windows needs forward-slash host paths in -v specs;
+    # backslashes make it mis-split on the drive/separator colons.
+    $FeedPathU  = ($FeedPath  -replace '\\', '/')
+    $OutDirU    = ($OutDir    -replace '\\', '/')
+    $tmpScriptU = ($tmpScript -replace '\\', '/')
     $runArgs = @(
         "run", "--rm",
-        "-v", "${FeedPath}:/feed:ro",
-        "-v", "${OutDir}:/out",
-        "-v", "${tmpScript}:/tmp/build-inner.sh:ro",
+        "-v", "${FeedPathU}:/feed:ro",
+        "-v", "${OutDirU}:/out",
+        "-v", "${tmpScriptU}:/tmp/build-inner.sh:ro",
         $ImageTag,
         "bash", "/tmp/build-inner.sh"
     )
