@@ -18,6 +18,15 @@ var callServiceAction = rpc.declare({
 	expect: { }
 });
 
+var callSetAutostart = rpc.declare({
+	object: 'ziti',
+	method: 'set_autostart',
+	params: [ 'enabled' ],
+	expect: { }
+});
+
+var UI_BUILD = 'ui 20260811-182440';
+
 return view.extend({
 	handleSaveApply: null,
 	handleSave:      null,
@@ -32,6 +41,9 @@ return view.extend({
 		var running    = !!data.running;
 		var version    = data.version || '';
 		var identities = Array.isArray(data.identities) ? data.identities : [];
+		var autostart  = !!data.autostart;
+		var guardState = data.guard_state || '';
+		var bootFails  = parseInt(data.boot_failures, 10) || 0;
 
 		var statusBadge = E('span', {
 			'class': running ? 'label success' : 'label warning',
@@ -79,7 +91,8 @@ return view.extend({
 		};
 
 		var view = E([], [
-			E('h2', {}, _('OpenZiti Status')),
+			E('h2', {}, [ _('OpenZiti Status'),
+				E('small', { 'style': 'margin-left:.75em;color:#999;font-weight:normal' }, UI_BUILD) ]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('table', { 'class': 'table' }, [
 					E('tr', { 'class': 'tr' }, [
@@ -89,7 +102,20 @@ return view.extend({
 					E('tr', { 'class': 'tr' }, [
 						E('td', { 'class': 'td left' }, _('Version')),
 						E('td', { 'class': 'td left' }, version || _('unknown'))
-					])
+					]),
+					guardState ? E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td left' }, _('Last boot check')),
+						E('td', { 'class': 'td left' }, (function () {
+							// PASS = green; anything falling open or incomplete = warning.
+							var bad = /fall-open|FAIL|INCOMPLETE/.test(guardState);
+							var pass = /PASS/.test(guardState);
+							var color = bad ? '#c44' : (pass ? '#5aa726' : '#999');
+							var txt = guardState;
+							if (bootFails > 0)
+								txt += _(' (%d consecutive boot failure(s))').format(bootFails);
+							return E('span', { 'style': 'color:' + color }, txt);
+						})())
+					]) : ''
 				]),
 				E('div', { 'style': 'margin-top:1em;' }, [
 					btn(_('Start'),   'start',   'positive'),
@@ -98,6 +124,23 @@ return view.extend({
 					' ',
 					btn(_('Restart'), 'restart', 'action')
 				])
+			]),
+			E('div', { 'class': 'cbi-section' }, [
+				E('h3', {}, _('Start at boot')),
+				E('div', {}, (function () {
+					var cb = E('input', { 'type': 'checkbox', 'style': 'vertical-align:middle;margin-right:.4em' });
+					cb.checked = autostart;
+					cb.addEventListener('change', function () {
+						callSetAutostart(cb.checked).then(function (res) {
+							if (res && res.error) throw new Error(res.error.message || res.error.code);
+							ui.addNotification(null, E('p', {}, _('Start at boot %s.').format(cb.checked ? _('enabled') : _('disabled'))), 'info');
+						}).catch(function (e) {
+							cb.checked = !cb.checked;
+							ui.addNotification(null, E('p', {}, _('Failed to change autostart: %s').format(e.message || e)), 'danger');
+						});
+					});
+					return E('label', {}, [ cb, _('Start ziti-edge-tunnel automatically on boot') ]);
+				})())
 			]),
 			E('h3', {}, _('Enrolled Identities')),
 			E('div', { 'class': 'cbi-section' }, [

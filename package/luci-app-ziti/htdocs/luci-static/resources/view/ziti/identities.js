@@ -3,8 +3,14 @@
 'require view';
 'require rpc';
 'require ui';
-'require uci';
-'require dom';
+
+var UI_BUILD = 'ui 20260811-182440';
+
+var callList = rpc.declare({
+	object: 'ziti',
+	method: 'list_identities',
+	expect: { }
+});
 
 var callEnroll = rpc.declare({
 	object: 'ziti',
@@ -26,34 +32,27 @@ return view.extend({
 	handleReset:     null,
 
 	load: function () {
-		return uci.load('ziti');
+		return callList().catch(function () { return { identities: [] }; });
 	},
 
 	doEnroll: function (name, jwt) {
-		// Caller validates inputs; this is defense-in-depth.
 		if (!name || !jwt) return Promise.resolve();
 		ui.showModal(_('Enrolling...'), [
 			E('p', { 'class': 'spinning' }, _('Contacting controller and writing identity.'))
 		]);
-		// IMPORTANT: rpcd backend wipes the JWT staging file after use; the
-		// browser-side variable holding `jwt` goes out of scope after this
-		// promise resolves. We never persist the JWT in localStorage / UCI.
 		return callEnroll(name, jwt).then(function (res) {
 			ui.hideModal();
 			if (res && res.error) {
 				ui.addNotification(null,
-					E('p', _('Enrollment failed: %s').format(res.error.message || res.error.code)),
-					'danger');
+					E('p', {}, _('Enrollment failed: %s').format(res.error.message || res.error.code)), 'danger');
 				return;
 			}
 			ui.addNotification(null,
-				E('p', _('Identity %q enrolled at %s').format(name, (res && res.file) || '')),
-				'info');
+				E('p', {}, _('Identity %q enrolled at %s').format(name, (res && res.file) || '')), 'info');
 			window.setTimeout(function () { location.reload(); }, 750);
 		}).catch(function (e) {
 			ui.hideModal();
-			ui.addNotification(null,
-				E('p', _('Enrollment failed: %s').format(e.message || e)), 'danger');
+			ui.addNotification(null, E('p', {}, _('Enrollment failed: %s').format(e.message || e)), 'danger');
 		});
 	},
 
@@ -63,7 +62,7 @@ return view.extend({
 		return callRemove(name).then(function () {
 			location.reload();
 		}).catch(function (e) {
-			ui.addNotification(null, E('p', _('Remove failed: %s').format(e.message || e)), 'danger');
+			ui.addNotification(null, E('p', {}, _('Remove failed: %s').format(e.message || e)), 'danger');
 		});
 	},
 
@@ -76,9 +75,9 @@ return view.extend({
 		});
 	},
 
-	render: function () {
+	render: function (data) {
 		var self = this;
-		var sections = uci.sections('ziti', 'identity');
+		var ids = (data && data.identities) || [];
 
 		var rows = [
 			E('tr', { 'class': 'tr table-titles' }, [
@@ -89,38 +88,32 @@ return view.extend({
 			])
 		];
 
-		if (!sections.length) {
+		if (!ids.length) {
 			rows.push(E('tr', { 'class': 'tr placeholder' }, [
-				E('td', { 'class': 'td', 'colspan': 4 }, _('No identities configured.'))
+				E('td', { 'class': 'td', 'colspan': 4 }, _('No identities enrolled.'))
 			]));
 		} else {
-			sections.forEach(function (s) {
+			ids.forEach(function (it) {
 				rows.push(E('tr', { 'class': 'tr' }, [
-					E('td', { 'class': 'td' }, s.name || ''),
-					E('td', { 'class': 'td' }, s.file || ''),
-					E('td', { 'class': 'td' }, (s.enabled === '0') ? _('no') : _('yes')),
+					E('td', { 'class': 'td' }, it.name || ''),
+					E('td', { 'class': 'td' }, it.file || ''),
+					E('td', { 'class': 'td' }, it.enabled ? _('yes') : _('no')),
 					E('td', { 'class': 'td' }, [
 						E('button', {
 							'class': 'btn cbi-button cbi-button-remove',
-							'click': ui.createHandlerFn(self, 'doRemove', s.name)
+							'click': ui.createHandlerFn(self, 'doRemove', it.name)
 						}, _('Remove'))
 					])
 				]));
 			});
 		}
 
-		// Enrollment form. JWT is provided either by file upload or paste; in
-		// either case it lives only in the browser DOM until the rpcd call
-		// completes, then the form is reset.
 		var nameInput = E('input', {
-			'type': 'text',
-			'class': 'cbi-input-text',
-			'placeholder': _('e.g. home-router'),
-			'pattern': '[A-Za-z0-9_-]+'
+			'type': 'text', 'class': 'cbi-input-text',
+			'placeholder': _('e.g. home-router'), 'pattern': '[A-Za-z0-9_-]+'
 		});
 		var jwtArea = E('textarea', {
-			'class': 'cbi-input-textarea',
-			'rows': 6,
+			'class': 'cbi-input-textarea', 'rows': 6,
 			'style': 'width:100%;font-family:monospace;',
 			'placeholder': _('Paste JWT contents here, or use the file picker below.')
 		});
@@ -128,9 +121,7 @@ return view.extend({
 		fileInput.addEventListener('change', function (ev) {
 			var f = ev.target.files && ev.target.files[0];
 			if (!f) return;
-			self.readFileAsText(f).then(function (txt) {
-				jwtArea.value = txt.trim();
-			});
+			self.readFileAsText(f).then(function (txt) { jwtArea.value = txt.trim(); });
 		});
 
 		var submitBtn = E('button', {
@@ -139,35 +130,30 @@ return view.extend({
 				var name = (nameInput.value || '').trim();
 				var jwt  = (jwtArea.value  || '').trim();
 				if (!name || !/^[A-Za-z0-9_-]+$/.test(name)) {
-					ui.addNotification(null, E('p',
-						_('Identity name is required (letters, digits, _ or - only).')), 'warning');
+					ui.addNotification(null, E('p', {}, _('Identity name is required (letters, digits, _ or - only).')), 'warning');
 					return Promise.resolve();
 				}
 				if (!jwt) {
-					ui.addNotification(null, E('p',
-						_('JWT contents are required.')), 'warning');
+					ui.addNotification(null, E('p', {}, _('JWT contents are required.')), 'warning');
 					return Promise.resolve();
 				}
 				return self.doEnroll(name, jwt).finally(function () {
-					// Best-effort scrub of the in-DOM JWT.
-					jwtArea.value = '';
-					fileInput.value = '';
+					jwtArea.value = ''; fileInput.value = '';
 				});
 			})
 		}, _('Enroll'));
 
 		return E([], [
-			E('h2', {}, _('OpenZiti Identities')),
-
+			E('h2', {}, [ _('OpenZiti Identities'),
+				E('small', { 'style': 'margin-left:.75em;color:#999;font-weight:normal' }, UI_BUILD) ]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('Enrolled')),
 				E('table', { 'class': 'table cbi-section-table' }, rows)
 			]),
-
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('Enroll a new identity')),
 				E('p', { 'class': 'cbi-section-descr' },
-					_('Provide a one-time JWT issued by your Ziti controller. The JWT is staged in a root-only directory, consumed by ziti-edge-tunnel, and then wiped. It is never written to /tmp or to UCI.')),
+					_('Provide a one-time JWT issued by your Ziti controller. The JWT is staged in a root-only directory, consumed by ziti-edge-tunnel, and then wiped -- never written to /tmp or UCI.')),
 				E('div', { 'class': 'cbi-value' }, [
 					E('label', { 'class': 'cbi-value-title' }, _('Identity name')),
 					E('div', { 'class': 'cbi-value-field' }, [ nameInput ])

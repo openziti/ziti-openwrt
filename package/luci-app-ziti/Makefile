@@ -12,7 +12,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-ziti
 PKG_VERSION:=0.1.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=openwrt-openziti contributors
@@ -69,6 +69,7 @@ define Package/$(PKG_NAME)/install
 	# root/ -> /
 	if [ -d ./root ]; then \
 		$(CP) -r ./root/. $(1)/ ; \
+		chmod 0755 $(1)/usr/libexec/rpcd/ziti ; \
 	fi
 endef
 

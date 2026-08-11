@@ -34,6 +34,18 @@
 		}
 	},
 
+	"admin/services/ziti/tunnel": {
+		"title": "Tunnel Mode",
+		"order": 25,
+		"action": {
+			"type": "view",
+			"path": "ziti/tunnel"
+		},
+		"depends": {
+			"acl": [ "luci-app-ziti" ]
+		}
+	},
+
 	"admin/services/ziti/settings": {
 		"title": "Settings",
 		"order": 30,
