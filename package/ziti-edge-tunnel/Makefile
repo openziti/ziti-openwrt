@@ -7,14 +7,14 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ziti-edge-tunnel
-PKG_VERSION:=1.15.1
+PKG_VERSION:=1.18.1
 PKG_RELEASE:=2
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openziti/ziti-tunnel-sdk-c/tar.gz/refs/tags/v$(PKG_VERSION)?
 PKG_SOURCE_SUBDIR:=ziti-tunnel-sdk-c-$(PKG_VERSION)
 # sha256 of the codeload source tarball at refs/tags/v$(PKG_VERSION).
-PKG_HASH:=12f01f561a3d70db796ed73691edac5498e931284171571e2280102140f37fd0
+PKG_HASH:=9f780b7d46da7467941f800966a39a634b65b02bc36bfb953ffd3784ca6659ff
 
 PKG_MAINTAINER:=OpenZiti contributors <developers@openziti.org>
 PKG_LICENSE:=Apache-2.0
@@ -96,6 +96,9 @@ define Package/ziti-edge-tunnel/install
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/ziti-edge-tunnel $(1)/etc/init.d/ziti-edge-tunnel
+
+	$(INSTALL_DIR) $(1)/usr/libexec
+	$(INSTALL_BIN) ./files/usr/libexec/ziti-boot-guard $(1)/usr/libexec/ziti-boot-guard
 
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/ziti $(1)/etc/config/ziti
