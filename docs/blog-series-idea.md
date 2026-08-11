@@ -11,8 +11,8 @@ That is the hook. The overlay is invisible to the client; the travel router does
 ## Series arc (5 parts)
 
 ### Part 1 -- "Appear at home from anywhere: why a travel router, and why not a VPN"
-- Hook: Netflix (and your bank, and your home NAS) all behave as if you never left the couch -- from a hotel, with
-  no VPN app on any device.
+- Hook: your home NAS, your internal dashboards, and the bank that flags foreign logins all behave as if you never
+  left the couch -- from a hotel, with no VPN app on any device.
 - Beat: the goal and the shape of the solution. What a travel router is, what "full tunnel" means here, and why
   OpenZiti is a strange but powerful choice: it is an application-layer (L4) overlay, not an IP/packet VPN. That
   distinction drives everything later (TCP/UDP only, no ICMP, the exit opens its own sockets and self-NATs).
@@ -84,7 +84,7 @@ type any of it." Links out to the deeper docs for the full CLI.
 ## Production notes
 
 - Use the `ziti-slide` skill for OpenZiti-branded title slides, the architecture diagram (dark navy, teal/blue accent,
-  floating terminal cards), and a YouTube thumbnail if any part becomes a video. The topology and the failure-mode
+  floating terminal cards), and a video thumbnail if any part becomes a video. The topology and the failure-mode
   diagrams are the two worth rendering in that style.
 - Keep code blocks parameterized (controller, service, identity names) and point at the CLI reference doc so the post
   stays readable while the copy-paste lives in the repo.

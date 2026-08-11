@@ -27,13 +27,13 @@ Datapath, outbound:
 
 Consequences of OpenZiti being an application-layer (L4) overlay, not an IP/packet VPN:
 
-- TCP and UDP only. ICMP is not carried -- `ping`/`traceroute` do not traverse the overlay. Browsing, streaming,
+- TCP and UDP only. ICMP is not carried -- `ping`/`traceroute` do not traverse the overlay. Browsing, video,
   QUIC/HTTP-3, DNS all work.
 - The exit self-NATs. Because it opens its own sockets, the exit host's kernel source-NATs them like any local
   process -- so the exit needs NO `New-NetNat`/`ip_forward`/masquerade. This is the opposite of WireGuard/OpenVPN and
   removes the biggest piece of exit-side setup.
-- Egress geography is the exit's. If the exit sits on your home LAN, clients appear at your home ISP IP (Netflix sees
-  home). If it is a cloud VPS, they appear there.
+- Egress location is the exit's. If the exit sits on your home LAN, clients appear at your home ISP IP (remote sites
+  see the home connection). If it is a cloud VPS, they appear there.
 - Authorization is by role attribute. A Bind policy (`#internet-exit`) says who may host; a Dial policy
   (`#travel-clients`) says who may use. Add a new traveling device by creating an identity with `-a travel-clients` --
   no policy edits, ever.
@@ -88,10 +88,11 @@ of CIDR/hostname services, and for the exit side in `host` mode.
   when the tunnel is up because the resolver then routes via `ziti0`). Related: openziti/ziti #2400 -- a wide
   intercept must not swallow the system's DNS-upstream IP; pin the controller by IP so ZET never needs public DNS.
 
-### Geo-correct DNS
-- For Netflix to serve the home catalog, DNS must resolve from the exit's vantage point, not the local uplink. Point
-  the router's dnsmasq upstream at a public resolver so the query itself tunnels and resolves as-if-home. (Egress IP
-  being home is necessary but not sufficient; DNS steering matters too.)
+### Location-correct DNS
+- For home-only or source-IP-restricted services to resolve to the same endpoints they would at home, DNS must
+  resolve from the exit's vantage point, not the local uplink. Point the router's dnsmasq upstream at a public
+  resolver so the query itself tunnels and resolves as-if-home. (Egress IP being home is necessary but not
+  sufficient; DNS steering matters too.)
 
 ### Captive portals
 - Hotel/airport portals intercept HTTP to a local or public address. Directly-connected uplink traffic stays direct

@@ -2,8 +2,9 @@
 
 Goal: a GL.iNet Slate 7 (GL-BE3600) travel router sends ALL client traffic -- except the OpenZiti control/data
 underlay and the local uplink -- through the OpenZiti overlay to a home-side exit node, so every device behind the
-Slate appears to be sitting on the home network (home ISP public IP, home geo). Netflix and other geo/CDN-steered
-services then behave as if you were home.
+Slate appears to be sitting on the home network (home ISP public IP). Home LAN devices and services -- a NAS,
+a home media server, printers, internal dashboards -- and any site that keys on source IP then behave as if you
+were home.
 
 Controller + edge router already run in AWS. The exit node is a Windows laptop in the home cabinet, "sg3", reachable
 by RDP.
@@ -20,11 +21,11 @@ destination. Consequences:
    any local process. No `New-NetNat`, RRAS, ICS, or `IPEnableRouter` is required on Windows. This is the opposite of
    a WireGuard/OpenVPN exit and removes the single biggest piece of Windows pain.
 2. **TCP and UDP only -- no ICMP.** The config schema restricts protocols to `["tcp","udp"]`. Ping/traceroute will not
-   traverse the overlay. Browsing, streaming, QUIC/HTTP-3, DNS all work; `ping 8.8.8.8` from a client will not. Test
+   traverse the overlay. Browsing, video, QUIC/HTTP-3, DNS all work; `ping 8.8.8.8` from a client will not. Test
    with `curl`, never `ping`.
 3. **Userspace throughput ceiling.** ZET proxies every flow in userspace on both ends. On an IPQ5332 travel router
    pushing all traffic, CPU is the likely bottleneck; expect well below kernel-VPN throughput. Fine for browsing and
-   streaming a couple of devices, which is the stated use case.
+   video on a couple of devices, which is the stated use case.
 4. **Engine: ZET, NOT the ziti-router tproxy.** The travel router runs `ziti-edge-tunnel` (TUN + lwIP), not a
    ziti-router edge-router-with-tunneler. The router's tproxy mode makes each intercepted CIDR local via
    `ip addr add <cidr> dev lo`, so a `0.0.0.0/0` (or even `/1`) intercept makes the router treat every destination as
@@ -52,7 +53,7 @@ destination. Consequences:
                              host.v1 forward-to-original-dst -> opens local sockets
                                  |
                                  v
-                          home ISP  +  home LAN  (Netflix sees home IP/geo)
+                          home ISP  +  home LAN  (remote sites see the home IP)
 ```
 
 One Ziti service, `internet-exit-svc`, carries both configs. Authorization is by role attribute, so minting another
@@ -370,9 +371,10 @@ scenario you hit when you power the box on in the field.
 4. From a LAN client behind the Slate:
    ```
    curl -s https://ifconfig.me        # returns the HOME ISP public IP, not the remote Wi-Fi's
-   curl -s https://ipinfo.io/json     # geo reads as home
+   curl -s https://ipinfo.io/json     # location reads as home
    ```
-   Then open Netflix in a browser -- it should serve the home catalog.
+   Then open a home-only service in a browser -- a NAS admin page or home media server -- it should load as if on
+   the home LAN.
 5. Do NOT test with `ping` -- ICMP is not carried; a failed ping is expected and means nothing.
 6. **Leak checks (do both -- these are what the `curl` geo test cannot catch):**
    - DNS: with ZET stopped, the 4.5 `tcpdump` proof captures zero packets to the resolver on WAN.
@@ -398,7 +400,7 @@ scenario you hit when you power the box on in the field.
    Operationalized as a required step in 4.2b (`ip route get` each endpoint + the roaming-safe hotplug re-pin).
 4. **masq-on-ziti0 assumption (4.3).** Validate return traffic with masq on; if a reason emerges to preserve client
    IPs, retest with masq off and confirm ZET routes non-local sources.
-5. **Throughput.** Measure real streaming throughput on the BE3600; if userspace ZET is the bottleneck, see fallbacks.
+5. **Throughput.** Measure real video throughput on the BE3600; if userspace ZET is the bottleneck, see fallbacks.
 6. **IPv6.** Deliberately OMITTED from the configs for v1 and disabled on the Slate (section 4.6) -- a half-wired IPv6
    stack is a straight leak path around the v4-only fail-closed. Completing IPv6 (intercept `::/1` + `8000::/1`, host
    `::/0`, a v6 firewall zone, RA/DHCPv6, and a v6 DNS-leak rule) is a separate later runbook, not a deploy-time toggle.

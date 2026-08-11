@@ -6,8 +6,8 @@ This is the narrative and rationale; the executable runbook is `docs/full-tunnel
 ## Goal
 
 A GL.iNet GL-BE3600 (Slate 7) travel router whose wifi lets **non-Ziti client devices** reach a chosen OpenZiti
-endpoint and egress from there, with **no OpenZiti software on the clients**. Primary use: appear to be at a remote
-location from anywhere (Netflix/geo-from-anywhere) by egressing at a home or cloud endpoint over the OpenZiti overlay.
+endpoint and egress from there, with **no OpenZiti software on the clients**. Primary use: reach the home network
+and its services from anywhere by egressing at a home or cloud endpoint over the OpenZiti overlay.
 
 - Phase 1 (current): egress through a cloud **VPS**. Prove a non-Ziti client on the GL wifi shows the VPS public IP
   via `curl ifconfig.me`.
@@ -201,8 +201,8 @@ subnet).
 
 ## Egress options and the home-exit switch
 
-- Proven exit = the EC2 edge router (Ohio) -- good for proving the mechanism, wrong geo for Netflix-as-home.
-- For real home geo, move the Bind to a home endpoint that egresses from the home ISP. Candidate: an M1 mini at home
+- Proven exit = the EC2 edge router (Ohio) -- good for proving the mechanism, wrong location for home-as-home.
+- For a real home vantage point, move the Bind to a home endpoint that egresses from the home ISP. Candidate: an M1 mini at home
   running `ziti-edge-tunnel` in a HOSTING mode (`run` or `run-host`). The macOS Desktop Edge app is client-only and
   will NOT host -- it must be the ziti-edge-tunnel CLI.
 - Safe switch (no black-hole): ADD the exit to the `internet-bind` policy while KEEPING the ER, confirm the exit
