@@ -1,3 +1,4 @@
+# Build outputs
 build/
 *.ipk
 .DS_Store
@@ -11,3 +12,13 @@ package/ziti-router/files/binaries/
 
 # Temporary parse-check / sanity scripts
 tools/.cache/
+
+# One-time enrollment tokens and local identity/service bodies -- never commit
+*.jwt
+/internet-intercept.json
+/internet-host.json
+
+# Local agent / review tooling scratch (not part of the shipped repo)
+/.claude/
+/.mercurius/
+/mercurius.yaml
