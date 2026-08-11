@@ -15,9 +15,9 @@ Placeholders:
 | `<EXIT_ROLE>` | `#internet-exit` | identities allowed to Bind/host |
 | `<TRAVEL_ID>` | `travel-router-01` | the travel router's client identity |
 | `<EXIT_ID>` | `vps-exit-01` / `sg3-exit` | the exit identity |
-| `<ER_NAME>` | `ip-172-31-47-200-edge-router` | an existing edge router (fallback exit) |
+| `<ER_NAME>` | `ip-10-0-0-1-edge-router` | an existing edge router (fallback exit) |
 | `<HOME_SUBNET>` | `192.168.50.0/24` | a home LAN you want reachable in split mode |
-| `<EXIT_PUBLIC_IP>` | `67.246.244.61` (home) / `3.18.113.172` (EC2) | the exit's egress IP (your proof target) |
+| `<EXIT_PUBLIC_IP>` | `203.0.113.10` (home) / `198.51.100.20` (cloud) | the exit's egress IP (your proof target) |
 
 Windows/PowerShell gotcha: long JSON args get line-wrapped by the console and corrupt the command. Put the JSON in a
 file and pass `((Get-Content -Raw .\file.json).Trim())`, as shown below.

@@ -71,7 +71,7 @@ type any of it." Links out to the deeper docs for the full CLI.
 
 ## Strongest visual moments
 
-- The traceroute collapse: from the home LAN, `tracert eth0.me` walks the full Charter path (Rochester -> Chicago ->
+- The traceroute collapse: from the home LAN, `tracert eth0.me` walks the full home-ISP path (multiple ISP hops to
   Cloudflare); from behind the travel router the SAME trace collapses to two hops (gateway -> destination) because the
   overlay underlay is opaque and ICMP is not carried. Side-by-side screenshot -- this one image tells the whole story.
 - `curl ifconfig.me` / `curl eth0.me` from a non-Ziti client on the travel wifi returning the HOME public IP, run from

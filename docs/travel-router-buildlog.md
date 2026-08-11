@@ -138,13 +138,13 @@ DHCP-lease** client-isolation trick is worth reusing regardless of engine.
 
 ## Current status and open items
 
-- Exit is now the existing overlay edge router `ip-172-31-47-200-edge-router` (added to the `internet-bind` policy by
-  `@name`), not a separate VPS -- fastest path. Egress = that EC2 box's public IP (~3.18.113.172, us-east-2). The
+- Exit is now the existing overlay edge router `ip-10-0-0-1-edge-router` (added to the `internet-bind` policy by
+  `@name`), not a separate VPS -- fastest path. Egress = that cloud box's public IP (`<exit-public-ip>`). The
   `#internet-exit` attribute stays in the policy so a dedicated VPS or home exit slots in later just by tagging.
 - Done: controller Part A (configs, service, policies, both identities); ER authorized to Bind `internet-exit-svc`;
   `travel-router-01` enrolled on the Slate. ZET is stopped with boot-autostart disabled.
 - Mechanism PROVEN: with ZET started, a router-originated `curl` to 1.1.1.1 tunneled Slate -> overlay ->
-  `ip-172-31-47-200-edge-router` -> internet ("ziti dial succeeded" in the ZET log). So the `host.v1` `0.0.0.0/0`
+  `ip-10-0-0-1-edge-router` -> internet ("ziti dial succeeded" in the ZET log). So the `host.v1` `0.0.0.0/0`
   wildcard forward IS honored at runtime by the ER, and NSS hardware offload did NOT bypass ziti0.
 - To validate on-device still: DNS-upstream exclusion (#2400); ICMP-not-tunneled; userspace throughput.
 
@@ -184,8 +184,8 @@ The staged approach worked. Added the `ziti` firewall zone + `lan->ziti` forward
 non-Ziti client on the glinet wifi egresses through the overlay at the chosen exit:
 
 - Both a router-origin request and a real client (the SG4 workstation on 192.168.8.x, no OpenZiti software) return
-  `ip=3.18.113.172` (`colo=CMH`, Ohio) from `https://1.1.1.1/cdn-cgi/trace` -- i.e. glinet wifi client -> ziti0 ->
-  overlay -> `ip-172-31-47-200-edge-router` -> internet, egressing at the EC2 box.
+  `ip=<exit-public-ip>` from `https://1.1.1.1/cdn-cgi/trace` -- i.e. glinet wifi client -> ziti0 ->
+  overlay -> `ip-10-0-0-1-edge-router` -> internet, egressing at the cloud box.
 - `masq=1` on the ziti zone (client src rewritten to 100.64.0.1) made forwarded client traffic take the same proven
   path as router-origin traffic. This is the key that made the staged flip carry client traffic instead of dropping it.
 
@@ -211,9 +211,9 @@ subnet).
 - Exit candidates tried: (1) M1 mini -- rejected, its ziti service restarts unreliably. (2) sg3 Windows box running
   ZDEW -- tagged its identity `ClintSG3` with `#internet-exit`. CORRECTION to an earlier note: ZDEW DOES host --
   after a manual disable/enable of the identity in the GUI, `ClintSG3` registered a terminator and became the exit
-  (this is where the home egress `67.246.244.61` came from). But it is UNRELIABLE: it needs the manual nudge to
+  (this is where the home egress `<home-public-ip>` came from). But it is UNRELIABLE: it needs the manual nudge to
   register, and it DROPS the terminator on reboot/uplink-change, silently falling back to the ER (Ohio) -- observed
-  as `curl eth0.me` returning `3.18.113.172` again after a reboot. So ZDEW-hosting works but is not set-and-forget.
+  as `curl eth0.me` returning `<exit-public-ip>` again after a reboot. So ZDEW-hosting works but is not set-and-forget.
   The reliable Windows exit is the `ziti-edge-tunnel.exe` CLI in `run-host` mode with its own identity `sg3-exit`,
   wrapped as an nssm auto-start service (coexists with ZDEW). Egress then = the sg3 home ISP IP, durably.
 - Stale exit authorizations accumulate as you experiment (m1mini-exit, vps-exit-01, ClintSG3 all left tagged
@@ -225,15 +225,15 @@ subnet).
 ## Home-egress PROVEN via sg3
 
 With `ziti-edge-tunnel.exe run-host` up on sg3 (identity `sg3-exit`, tagged `#internet-exit`), a non-Ziti client on
-the glinet wifi egresses from the **home ISP IP** `67.246.244.61` (Charter/Rochester; colo ORD/Chicago) -- confirmed by
-`curl https://1.1.1.1/cdn-cgi/trace` and `curl eth0.me` from the SG4 workstation, no longer the EC2 exit
-`3.18.113.172`. This is the full project goal: appear to be at home, from a device with no OpenZiti software, behind a
+the glinet wifi egresses from the **home ISP IP** `<home-public-ip>` -- confirmed by
+`curl https://1.1.1.1/cdn-cgi/trace` and `curl eth0.me` from the workstation, no longer the cloud exit
+`<exit-public-ip>`. This is the full project goal: appear to be at home, from a device with no OpenZiti software, behind a
 wifi we operate.
 
-Traceroute confirms the datapath: from the home LAN directly, `tracert eth0.me` walks the full Charter path
-(Rochester -> Chicago -> Cloudflare); from behind the glinet the same trace collapses to `192.168.8.1` -> destination
+Traceroute confirms the datapath: from the home LAN directly, `tracert eth0.me` walks the full home-ISP path
+(multiple ISP hops to Cloudflare); from behind the glinet the same trace collapses to `192.168.8.1` -> destination
 with every ISP hop gone -- the L4-overlay signature (opaque underlay, ICMP not carried) -- while the egress IP stays
-the home `67.246.244.61`.
+the home `<home-public-ip>`.
 
 - Ziti preferred sg3 automatically: its `edge` terminator has cost 0 vs the ER's `tunnel` terminator cost 4, so
   traffic chose the home exit with both bound -- no policy change required to route through home.
@@ -260,10 +260,10 @@ Correct order for the guest/foreign-network test:
 
 ### Confirmation: fresh hardened start on the foreign network WORKS
 
-On the isolated PPIoT uplink (glinet `192.168.102.135` via gateway `192.168.102.1` on `sta0`, a network that cannot
-even ping sg3 at `192.168.1.147`), a FRESH ZET start with the `/etc/hosts` controller pin bootstrapped cleanly:
-`ip route get 3.18.113.172` -> `via 192.168.102.1 dev sta0` (exclusion correctly re-derived on the new gateway),
-`1.1.1.1` -> `ziti0`, and a client egressed the home IP `67.246.244.61`. This proves portability -- the travel router
+On an isolated foreign uplink (glinet on `sta0`, a network that cannot even reach the sg3 exit on the home LAN), a
+FRESH ZET start with the `/etc/hosts` controller pin bootstrapped cleanly: `ip route get <controller-ip>` ->
+`via <uplink-gateway> dev sta0` (exclusion correctly re-derived on the new gateway), `1.1.1.1` -> `ziti0`, and a
+client egressed the home public IP. This proves portability -- the travel router
 works from a genuinely foreign/isolated network -- and confirms by contrast that Incident 2 was the live-uplink-change
 leaving a stale exclusion (host-route via the OLD gateway) while the wildcard intercept swallowed ZET's own reconnect.
 No logs exist from the incident itself (box was wedged); this fresh-start success is the confirming experiment, not a
@@ -276,8 +276,8 @@ or a procd one-shot rather than a backgrounded subshell.
 
 ## Bonus: home-LAN reach, not just internet egress
 
-A client behind the glinet reaching a home-LAN host (sg3 at `192.168.1.147`) traces in 2 hops (glinet -> destination):
-the traffic is intercepted (`192.168.1.147` is inside `128.0.0.0/1`), tunneled to the sg3 exit, and sg3 forwards it
+A client behind the glinet reaching a home-LAN host (sg3 at `<home-lan-host>`) traces in 2 hops (glinet -> destination):
+the traffic is intercepted (`<home-lan-host>` is inside `128.0.0.0/1`), tunneled to the sg3 exit, and sg3 forwards it
 onto its own LAN via `host.v1` (`allowedAddresses 0.0.0.0/0` covers `192.168.1.0/24`). So the single wildcard exit
 gives full home-LAN access as well as internet egress -- the Phase-2 "reach my other network" goal is met by the same
 service, as long as the exit sits on that LAN. This works only while the exit is up; via flaky ZDEW it drops on
@@ -387,7 +387,7 @@ until CI publishes 1.18.1 to the feed.
 refs/tags/v1.18.1, verified by download). BUILT + INSTALLED: compiled cleanly (3-version jump is fine; `llhttp`
 stayed 9.4.1, no bump needed), repacked to `aarch64_cortex-a53_neon-vfpv4`, and opkg-upgraded on the glinet
 1.15.1-2 -> 1.18.1-1 (binary reports v1.18.1). ACTIVATED via the LuCI Status Restart button; the running daemon is
-now 1.18.1 and a client still egresses the home IP 67.246.244.61 (full-tunnel intact). The live `/etc/config/ziti`
+now 1.18.1 and a client still egresses the home IP <home-public-ip> (full-tunnel intact). The live `/etc/config/ziti`
 was preserved (opkg parked its default at `/etc/config/ziti-opkg`). Transient `err=-14` per-connection resets appeared
 in the log during the reconnect blip and are benign (egress works).
 
