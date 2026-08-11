@@ -62,6 +62,33 @@ ensure_dirs() {
 	chmod 0700 "$JWT_STAGE_DIR" 2>/dev/null || true
 }
 
+build_identities_json() {
+	# Enumerate the identity DIR (ZET's source of truth), not UCI sections.
+	# <name>.json = enabled/active; <name>.json.disabled = disabled (toggle/rename).
+	local idents="[" first=1 f name en ctrl st running
+	running=0; pidof ziti-edge-tunnel >/dev/null 2>&1 && running=1
+	for f in "$IDENT_DIR"/*.json "$IDENT_DIR"/*.json.disabled; do
+		[ -e "$f" ] || continue
+		case "$f" in
+			*.json.disabled) name=$(basename "$f" .json.disabled); en=0 ;;
+			*.json)          name=$(basename "$f" .json);          en=1 ;;
+			*) continue ;;
+		esac
+		# ZET writes its runtime status to config.json in the identity dir -- not an identity.
+		[ "$name" = "config" ] && continue
+		# controller URL from the identity file (ztAPI), falling back to ztAPIs[0].
+		ctrl=$(jsonfilter -i "$f" -e '@.ztAPI' 2>/dev/null)
+		[ -n "$ctrl" ] || ctrl=$(jsonfilter -i "$f" -e '@.ztAPIs[0]' 2>/dev/null)
+		ctrl=$(printf '%s' "$ctrl" | sed 's/\\/\\\\/g; s/"/\\"/g')
+		if [ "$en" = "0" ]; then st="disabled"; elif [ "$running" = "1" ]; then st="active"; else st="stopped"; fi
+		[ $first -eq 0 ] && idents="$idents,"
+		idents="$idents{\"name\":\"$name\",\"file\":\"$f\",\"enabled\":$en,\"controller\":\"$ctrl\",\"status\":\"$st\"}"
+		first=0
+	done
+	idents="$idents]"
+	printf '%s' "$idents"
+}
+
 # ---------- methods ----------
 
 method_status() {
@@ -73,48 +100,26 @@ method_status() {
 		version="$($ZET_BIN version 2>/dev/null | head -n1 | tr -d '\r\n')"
 	fi
 
-	# Build identities array from UCI.
-	local idents="["
-	local first=1
-	local sect_count
-	sect_count=$(uci -q show ziti 2>/dev/null | grep -c '=identity$' || echo 0)
-	if [ "$sect_count" -gt 0 ]; then
-		local i=0
-		while [ $i -lt "$sect_count" ]; do
-			local n f e
-			n=$(uci -q get "ziti.@identity[$i].name" 2>/dev/null)
-			f=$(uci -q get "ziti.@identity[$i].file" 2>/dev/null)
-			e=$(uci -q get "ziti.@identity[$i].enabled" 2>/dev/null)
-			[ -z "$e" ] && e=1
-			[ $first -eq 0 ] && idents="$idents,"
-			idents="$idents{\"name\":\"$n\",\"file\":\"$f\",\"enabled\":$e,\"controller\":\"\",\"status\":\"unknown\"}"
-			first=0
-			i=$((i+1))
-		done
-	fi
-	idents="$idents]"
+	# Identities come from the identity DIR (ZET's source of truth), not UCI.
+	local idents
+	idents=$(build_identities_json)
 
-	printf '{"running":%d,"version":"%s","identities":%s}\n' "$running" "$version" "$idents"
+	# Boot autostart = the procd rc.d symlink state.
+	local autostart=false
+	if /etc/init.d/ziti-edge-tunnel enabled 2>/dev/null; then autostart=true; fi
+
+	# Last boot-guard verdict (fall-open / PASS / etc), surfaced so a boot that
+	# fell back to direct internet is visible in the UI instead of a mystery.
+	local guard failures
+	guard=$(cat /etc/ziti/boot-guard.state 2>/dev/null | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g')
+	failures=$(cat /etc/ziti/autostart-failures 2>/dev/null | grep -E '^[0-9]+$' || echo 0)
+
+	printf '{"running":%d,"version":"%s","autostart":%s,"guard_state":"%s","boot_failures":%s,"identities":%s}\n' \
+		"$running" "$version" "$autostart" "$guard" "$failures" "$idents"
 }
 
 method_list_identities() {
-	local idents="["
-	local first=1
-	local sect_count i=0
-	sect_count=$(uci -q show ziti 2>/dev/null | grep -c '=identity$' || echo 0)
-	while [ $i -lt "$sect_count" ]; do
-		local n f e
-		n=$(uci -q get "ziti.@identity[$i].name" 2>/dev/null)
-		f=$(uci -q get "ziti.@identity[$i].file" 2>/dev/null)
-		e=$(uci -q get "ziti.@identity[$i].enabled" 2>/dev/null)
-		[ -z "$e" ] && e=1
-		[ $first -eq 0 ] && idents="$idents,"
-		idents="$idents{\"name\":\"$n\",\"file\":\"$f\",\"enabled\":$e}"
-		first=0
-		i=$((i+1))
-	done
-	idents="$idents]"
-	printf '{"identities":%s}\n' "$idents"
+	printf '{"identities":%s}\n' "$(build_identities_json)"
 }
 
 method_enroll() {
@@ -192,6 +197,11 @@ method_enroll() {
 	uci set "ziti.$sid.enabled=1"
 	uci commit ziti
 
+	# Pin EVERY controller from the new identity (ztAPI + ztAPIs[]) in /etc/hosts
+	# so ZET can resolve them on a later boot even before the tunnel is up. Same
+	# routine the boot guard runs; a stale pin here would block ZET entirely.
+	[ -x /usr/libexec/ziti-boot-guard ] && /usr/libexec/ziti-boot-guard refresh-hosts >/dev/null 2>&1
+
 	printf '{"ok":true,"name":"%s","file":"%s"}\n' "$name" "$out_file"
 }
 
@@ -227,6 +237,22 @@ method_remove_identity() {
 	fi
 }
 
+method_set_autostart() {
+	local args en
+	args="$(read_stdin_json)"
+	en=$(printf '%s' "$args" | jsonfilter -e '@.enabled' 2>/dev/null)
+	if [ ! -x /etc/init.d/ziti-edge-tunnel ]; then
+		emit_error "no_init" "ziti-edge-tunnel init script missing"; return
+	fi
+	if [ "$en" = "true" ] || [ "$en" = "1" ]; then
+		/etc/init.d/ziti-edge-tunnel enable  >/dev/null 2>&1
+		printf '{"ok":true,"autostart":true}\n'
+	else
+		/etc/init.d/ziti-edge-tunnel disable >/dev/null 2>&1
+		printf '{"ok":true,"autostart":false}\n'
+	fi
+}
+
 method_service_action() {
 	local args action
 	args="$(read_stdin_json)"
@@ -243,6 +269,170 @@ method_service_action() {
 	printf '{"ok":true,"action":"%s"}\n' "$action"
 }
 
+# ---------- tunnel mode (full vs split) ----------
+#
+# full  = the wildcard "full_identity" is active (dials the 0.0.0.0/0 service),
+#         lan->ziti forwarding on, lan->wan removed (fail-closed: all client
+#         traffic must go through the tunnel).
+# split = the "split_identity" is active (dials only narrow services),
+#         lan->ziti forwarding on AND lan->wan present (untunneled traffic goes
+#         out directly).
+# Which destinations enter the tunnel is decided by which identity/services are
+# dialed -- OpenZiti is service-based -- not by the firewall alone. The firewall
+# only decides whether non-intercepted client traffic may egress directly.
+
+FW_ZONE_NAME="ziti"
+
+_fw_forwarding_index() {
+	# echo the index of a forwarding with src=$1 dest=$2, or nothing.
+	local i=0 c s d
+	c=$(uci -q show firewall | grep -c '=forwarding$' || echo 0)
+	while [ "$i" -lt "$c" ]; do
+		s=$(uci -q get "firewall.@forwarding[$i].src" 2>/dev/null)
+		d=$(uci -q get "firewall.@forwarding[$i].dest" 2>/dev/null)
+		[ "$s" = "$1" ] && [ "$d" = "$2" ] && { echo "$i"; return 0; }
+		i=$((i+1))
+	done
+	return 1
+}
+
+_fw_ensure_ziti_zone() {
+	uci -q show firewall | grep -q "\.name='$FW_ZONE_NAME'" && return 0
+	local z
+	z=$(uci add firewall zone)
+	uci set "firewall.$z.name=$FW_ZONE_NAME"
+	uci set "firewall.$z.input=REJECT"
+	uci set "firewall.$z.output=ACCEPT"
+	uci set "firewall.$z.forward=REJECT"
+	uci set "firewall.$z.masq=1"
+	uci add_list "firewall.$z.device=ziti0"
+}
+
+_fw_ensure_forwarding() {
+	# ensure a src=$1 dest=$2 forwarding exists
+	_fw_forwarding_index "$1" "$2" >/dev/null && return 0
+	local f
+	f=$(uci add firewall forwarding)
+	uci set "firewall.$f.src=$1"
+	uci set "firewall.$f.dest=$2"
+}
+
+_fw_remove_forwarding() {
+	# remove all src=$1 dest=$2 forwardings
+	local idx
+	while idx=$(_fw_forwarding_index "$1" "$2"); do
+		uci delete "firewall.@forwarding[$idx]"
+	done
+}
+
+_ident_enable()  { [ -f "$IDENT_DIR/$1.json.disabled" ] && mv "$IDENT_DIR/$1.json.disabled" "$IDENT_DIR/$1.json"; return 0; }
+_ident_disable() { [ -f "$IDENT_DIR/$1.json" ] && mv "$IDENT_DIR/$1.json" "$IDENT_DIR/$1.json.disabled"; return 0; }
+
+method_get_tunnel_mode() {
+	local m
+	m=$(uci -q get ziti.main.tunnel_mode 2>/dev/null)
+	[ -n "$m" ] || m="split"
+	printf '{"mode":"%s","full_identity":"%s","split_identity":"%s"}\n' \
+		"$m" \
+		"$(uci -q get ziti.main.full_identity 2>/dev/null)" \
+		"$(uci -q get ziti.main.split_identity 2>/dev/null)"
+}
+
+method_set_tunnel_mode() {
+	local args mode full_id split_id in_full in_split
+	args="$(read_stdin_json)"
+	mode=$(printf '%s' "$args" | jsonfilter -e '@.mode' 2>/dev/null)
+	in_full=$(printf  '%s' "$args" | jsonfilter -e '@.full_identity'  2>/dev/null)
+	in_split=$(printf '%s' "$args" | jsonfilter -e '@.split_identity' 2>/dev/null)
+	case "$mode" in full|split) ;; *) emit_error "invalid_args" "mode must be full|split"; return;; esac
+
+	# Validate identity names (empty is allowed; only alnum/dash/underscore).
+	case "$in_full"  in *[!A-Za-z0-9_-]*) emit_error "invalid_args" "invalid full_identity";  return;; esac
+	case "$in_split" in *[!A-Za-z0-9_-]*) emit_error "invalid_args" "invalid split_identity"; return;; esac
+	[ -n "$in_full" ]  && uci set ziti.main.full_identity="$in_full"
+	[ -n "$in_split" ] && uci set ziti.main.split_identity="$in_split"
+
+	full_id=$(uci -q get ziti.main.full_identity 2>/dev/null)
+	split_id=$(uci -q get ziti.main.split_identity 2>/dev/null)
+
+	_fw_ensure_ziti_zone
+	_fw_ensure_forwarding lan "$FW_ZONE_NAME"
+
+	if [ "$mode" = "full" ]; then
+		[ -n "$full_id" ]  && _ident_enable  "$full_id"
+		[ -n "$split_id" ] && _ident_disable "$split_id"
+		_fw_remove_forwarding lan wan          # fail-closed
+	else
+		[ -n "$split_id" ] && _ident_enable  "$split_id"
+		[ -n "$full_id" ]  && _ident_disable  "$full_id"
+		_fw_ensure_forwarding lan wan          # allow direct egress
+	fi
+
+	uci set ziti.main.tunnel_mode="$mode"
+	uci commit firewall
+	uci commit ziti
+	/etc/init.d/firewall reload >/dev/null 2>&1
+	/etc/init.d/ziti-edge-tunnel restart >/dev/null 2>&1
+	printf '{"ok":true,"mode":"%s"}\n' "$mode"
+}
+
+# ---------- updates (signed, GitHub-only) ----------
+
+_oz_feed_url() {
+	awk '/^src\/gz[[:space:]]+openziti[[:space:]]/ {print $3; exit}' /etc/opkg/customfeeds.conf 2>/dev/null
+}
+
+# Verify the openziti feed's Packages index signature (usign) against the
+# imported keys. Returns 0 if any imported key verifies it. This proves the
+# feed content is signed by the project WITHOUT enabling opkg's global
+# check_signature (which breaks GL.iNet's own unsigned feed).
+_oz_verify_feed() {
+	local url tmp k rc=1
+	url=$(_oz_feed_url); [ -n "$url" ] || return 1
+	tmp=$(mktemp -d) || return 1
+	if curl -fsSL "$url/Packages" -o "$tmp/Packages" 2>/dev/null &&
+	   curl -fsSL "$url/Packages.sig" -o "$tmp/Packages.sig" 2>/dev/null; then
+		for k in /etc/opkg/keys/*; do
+			[ -f "$k" ] || continue
+			if usign -V -p "$k" -m "$tmp/Packages" -x "$tmp/Packages.sig" >/dev/null 2>&1; then
+				rc=0; break
+			fi
+		done
+	fi
+	rm -rf "$tmp"
+	return $rc
+}
+
+method_check_update() {
+	local installed candidate feed verified upgradable
+	opkg update >/dev/null 2>&1
+	installed=$(opkg list-installed ziti-edge-tunnel 2>/dev/null | awk '{print $3; exit}')
+	candidate=$(opkg list ziti-edge-tunnel 2>/dev/null | awk '{print $3; exit}')
+	feed=$(_oz_feed_url)
+	# opkg decides if the feed actually has a NEWER version (avoids offering a downgrade).
+	if opkg list-upgradable 2>/dev/null | grep -q '^ziti-edge-tunnel '; then upgradable=true; else upgradable=false; fi
+	if _oz_verify_feed; then verified=true; else verified=false; fi
+	printf '{"installed":"%s","candidate":"%s","feed":"%s","verified":%s,"upgradable":%s}\n' \
+		"$installed" "$candidate" "$feed" "$verified" "$upgradable"
+}
+
+method_upgrade_zet() {
+	opkg update >/dev/null 2>&1
+	if ! _oz_verify_feed; then
+		emit_error "unverified" "openziti feed signature did not verify; refusing to upgrade"
+		return
+	fi
+	local out rc v
+	out=$(opkg install ziti-edge-tunnel 2>&1); rc=$?
+	if [ $rc -ne 0 ]; then
+		emit_error "install_failed" "$(printf '%s' "$out" | json_escape)"
+		return
+	fi
+	/etc/init.d/ziti-edge-tunnel restart >/dev/null 2>&1
+	v=$(opkg list-installed ziti-edge-tunnel 2>/dev/null | awk '{print $3; exit}')
+	printf '{"ok":true,"version":"%s"}\n' "$v"
+}
+
 # ---------- dispatch ----------
 
 case "${1:-}" in
@@ -253,7 +443,12 @@ case "${1:-}" in
 	"list_identities":  { },
 	"enroll":           { "name": "", "jwt": "" },
 	"remove_identity":  { "name": "" },
-	"service_action":   { "action": "" }
+	"service_action":   { "action": "" },
+	"set_autostart":    { "enabled": false },
+	"get_tunnel_mode":  { },
+	"set_tunnel_mode":  { "mode": "", "full_identity": "", "split_identity": "" },
+	"check_update":     { },
+	"upgrade_zet":      { }
 }
 EOF
 		;;
@@ -264,6 +459,11 @@ EOF
 			enroll)          method_enroll ;;
 			remove_identity) method_remove_identity ;;
 			service_action)  method_service_action ;;
+			set_autostart)   method_set_autostart ;;
+			get_tunnel_mode) method_get_tunnel_mode ;;
+			set_tunnel_mode) method_set_tunnel_mode ;;
+			check_update)    method_check_update ;;
+			upgrade_zet)     method_upgrade_zet ;;
 			*)               emit_error "no_method" "unknown method" ;;
 		esac
 		;;

@@ -11,6 +11,21 @@
 config ziti 'main'
 	option enabled '1'
 	option log_level 'INFO'
+	# Boot safeguards for FULL-tunnel mode. When boot_verify=1 the router will,
+	# on every boot in full mode: refresh controller pins in /etc/hosts, refuse
+	# to start the tunnel if no controller is reachable, and after start verify
+	# egress actually returns data -- falling back to direct internet on any
+	# failure so the wifi never black-holes. Ignored in split mode.
+	option boot_verify '1'
+	# After this many consecutive failed boots, boot-autostart is disabled.
+	option max_boot_failures '3'
+	# Optional: pin the expected egress IP (your exit endpoint's public IP). If
+	# set, verification also asserts traffic left from there, proving it tunneled
+	# rather than leaked to the local uplink. Leave empty to skip the assertion.
+	# option verify_expect_ip '203.0.113.10'
+	# Post-start verification window: verify_tries * verify_interval seconds.
+	# option verify_tries '12'
+	# option verify_interval '5'
 
 # Example -- gets written automatically by the LuCI Identities tab on
 # successful enroll, OR you can hand-edit after a CLI enroll:

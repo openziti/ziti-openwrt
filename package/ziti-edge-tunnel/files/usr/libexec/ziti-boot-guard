@@ -1,0 +1,299 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+#
+# ziti-boot-guard -- make unattended full-tunnel boot safe on a travel router.
+#
+# The overriding rule: the last thing we can have is "the wifi doesn't work".
+# Every failure path here falls OPEN (restore direct LAN->WAN, tear down the
+# tunnel), never closed. Fail-closed is only ever the deliberate result of a
+# SUCCESSFUL verification, applied by the LuCI tunnel-mode toggle -- never a
+# side effect of a boot that could not prove the tunnel carries data.
+#
+# Subcommands:
+#   refresh-hosts   Re-resolve EVERY controller in EVERY enabled identity via
+#                   direct DNS (ignoring /etc/hosts) and rewrite the managed
+#                   /etc/hosts block. Cleans stale pins (a changed controller IP
+#                   otherwise blocks ZET from ever connecting).
+#   preflight       FULL mode only. Refresh pins, then prove at least one
+#                   controller is reachable RIGHT NOW over the direct uplink.
+#                   Reachable -> exit 0 (init proceeds to start ZET).
+#                   Unreachable -> fall open and exit 1 (init must NOT start ZET).
+#   verify          FULL mode only. Runs detached, AFTER ZET is supposed to be
+#                   online. Require, within a bounded window: ZET running, a
+#                   controller reachable, the /1 intercept routes actually point
+#                   at ziti0, AND egress returns data THROUGH the tunnel.
+#                   PASS -> clear the failure counter, leave fail-closed intact.
+#                   FAIL -> fall open, bump the failure counter, and after
+#                   max_boot_failures disable boot-autostart.
+#
+# preflight/verify are no-ops (exit 0) in split mode or when boot_verify=0.
+
+set -u
+
+IDENT_DIR="/etc/ziti/identities"
+HOSTS_FILE="/etc/hosts"
+HOSTS_BEGIN="# BEGIN ziti-managed (ziti-boot-guard)"
+HOSTS_END="# END ziti-managed (ziti-boot-guard)"
+FAIL_FILE="/etc/ziti/autostart-failures"
+STATE_FILE="/etc/ziti/boot-guard.state"
+INIT="/etc/init.d/ziti-edge-tunnel"
+
+log() { logger -t ziti-guard "$*"; }
+
+# ---- UCI-backed knobs (with defaults). Trimmed of whitespace so a stray space
+# in a hand-edited value cannot silently disable a safeguard. ----
+uci_get() { uci -q get "ziti.main.$1" 2>/dev/null | tr -d '[:space:]'; }
+cfg_mode()      { local m; m=$(uci_get tunnel_mode); [ -n "$m" ] || m="split"; echo "$m"; }
+cfg_verify()    { local v; v=$(uci_get boot_verify); [ -n "$v" ] || v=1; echo "$v"; }
+cfg_expect_ip() { uci_get verify_expect_ip; }
+cfg_maxfail()   { local n; n=$(uci_get max_boot_failures); [ -n "$n" ] || n=3; echo "$n"; }
+cfg_tries()     { local n; n=$(uci_get verify_tries); [ -n "$n" ] || n=12; echo "$n"; }
+cfg_interval()  { local n; n=$(uci_get verify_interval); [ -n "$n" ] || n=5; echo "$n"; }
+
+write_state() { echo "$1" > "$STATE_FILE" 2>/dev/null || true; }
+
+is_ipv4() { echo "$1" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; }
+
+# ---- URL parsing (scheme://host[:port][/path]) ----
+url_host() {
+	# strip scheme, then path, then userinfo, then :port
+	echo "$1" | sed -e 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||' -e 's|/.*$||' -e 's|^[^@]*@||' -e 's|:[0-9]*$||'
+}
+url_port() {
+	local rest
+	rest=$(echo "$1" | sed -e 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||' -e 's|/.*$||' -e 's|^[^@]*@||')
+	case "$rest" in
+		*:[0-9]*) echo "${rest##*:}" ;;
+		*)        echo 443 ;;
+	esac
+}
+
+# ---- controller enumeration ----
+# Print every controller URL across all ENABLED identities (one per line, deduped).
+list_controllers() {
+	local f url
+	for f in "$IDENT_DIR"/*.json; do
+		[ -e "$f" ] || continue
+		[ "$(basename "$f")" = "config.json" ] && continue
+		url=$(jsonfilter -i "$f" -e '@.ztAPI' 2>/dev/null)
+		[ -n "$url" ] && echo "$url"
+		jsonfilter -i "$f" -e '@.ztAPIs[*]' 2>/dev/null
+	done | sort -u
+}
+
+# Resolve a hostname via DNS, bypassing /etc/hosts (busybox nslookup queries the
+# resolver directly). IPv4 answers only, one per line. Bounded so a black-holed
+# DNS server cannot stall boot (preflight is synchronous).
+resolve_v4() {
+	local h="$1" to=""
+	is_ipv4 "$h" && { echo "$h"; return 0; }
+	command -v timeout >/dev/null 2>&1 && to="timeout 5"
+	$to nslookup "$h" 2>/dev/null \
+		| sed -n '/^Name:/,$p' \
+		| awk '/^Address/ {print $NF}' \
+		| grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+}
+
+# ---- /etc/hosts managed block ----
+# Emit the current hosts file with our managed block removed. Handles the
+# power-loss case where a prior write left an orphaned BEGIN with no END: in
+# that case only the stray marker is dropped, never the user's other lines.
+strip_managed_block() {
+	local nb ne
+	nb=$(grep -Fxc "$HOSTS_BEGIN" "$HOSTS_FILE" 2>/dev/null); [ -n "$nb" ] || nb=0
+	ne=$(grep -Fxc "$HOSTS_END"   "$HOSTS_FILE" 2>/dev/null); [ -n "$ne" ] || ne=0
+	if [ "$nb" -ge 1 ] && [ "$ne" -ge 1 ]; then
+		awk -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" '
+			$0==b {skip=1; next} $0==e {skip=0; next} !skip {print}' "$HOSTS_FILE"
+	elif [ "$nb" -ge 1 ]; then
+		grep -vFx "$HOSTS_BEGIN" "$HOSTS_FILE"
+	else
+		cat "$HOSTS_FILE" 2>/dev/null
+	fi
+}
+
+refresh_hosts() {
+	local base blk out url host ip
+	base=$(mktemp) && blk=$(mktemp) && out=$(mktemp) || { log "refresh-hosts: mktemp failed"; return 1; }
+
+	strip_managed_block > "$base"
+
+	# Build ONLY our resolved pins into blk (no markers) so emptiness is a true
+	# "resolved nothing" signal -- not fooled by pre-existing 127.0.0.1 lines.
+	list_controllers | while IFS= read -r url; do
+		[ -n "$url" ] || continue
+		host=$(url_host "$url"); [ -n "$host" ] || continue
+		is_ipv4 "$host" && continue
+		for ip in $(resolve_v4 "$host"); do
+			printf '%s %s\n' "$ip" "$host"
+		done
+	done > "$blk"
+
+	if [ -s "$blk" ]; then
+		{ cat "$base"; echo "$HOSTS_BEGIN"; cat "$blk"; echo "$HOSTS_END"; } > "$out"
+		cat "$out" > "$HOSTS_FILE" && log "refresh-hosts: pinned $(wc -l < "$blk" | tr -d ' ') controller address(es)"
+	else
+		# Resolved nothing this run: keep whatever pins already exist rather than
+		# wiping them on a transient DNS blip.
+		log "refresh-hosts: resolved no controllers; left existing pins in place"
+	fi
+	rm -f "$base" "$blk" "$out"
+	return 0
+}
+
+# ---- reachability probes ----
+# Controller reachable over the current uplink? Any HTTP(S) response (even 404)
+# proves TCP+TLS reached it. -k: we care about reachability, not cert trust.
+ctrl_reachable() {
+	local url host port
+	list_controllers | while IFS= read -r url; do
+		[ -n "$url" ] || continue
+		host=$(url_host "$url"); port=$(url_port "$url")
+		if curl -k -sS -m 6 -o /dev/null "https://$host:$port/" 2>/dev/null; then
+			echo ok
+			return 0
+		fi
+	done | grep -q ok
+}
+
+# Egress works THROUGH the tunnel? Two independent gates:
+#   1. The 0.0.0.0/1 intercept must actually route 1.1.1.1 via ziti0. Without
+#      this a PARTIAL ZET (connected to the controller but with no routes
+#      installed) would pass on the router's plain WAN uplink -- a false PASS
+#      that leaves LAN clients black-holed while we report "healthy".
+#   2. A well-known TCP/443 endpoint must answer (proves the exit carries data).
+# Optional verify_expect_ip additionally asserts we egressed from the exit.
+egress_ok() {
+	local expect ip
+	if ! ip route get 1.1.1.1 2>/dev/null | grep -qw ziti0; then
+		log "verify: 1.1.1.1 is not routed via ziti0 (intercept routes absent)"
+		return 1
+	fi
+	if ! curl -k -sS -m 8 -o /dev/null "https://1.1.1.1/" 2>/dev/null \
+	   && ! curl -k -sS -m 8 -o /dev/null "https://8.8.8.8/" 2>/dev/null; then
+		return 1
+	fi
+	expect=$(cfg_expect_ip)
+	if [ -n "$expect" ]; then
+		ip=$(curl -sS -m 8 https://api.ipify.org 2>/dev/null | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+		[ "$ip" = "$expect" ] || { log "verify: egress IP '$ip' != expected '$expect'"; return 1; }
+	fi
+	return 0
+}
+
+# ---- routing / firewall recovery ----
+routes_present() {
+	ip route show 0.0.0.0/1   2>/dev/null | grep -q . && return 0
+	ip route show 128.0.0.0/1 2>/dev/null | grep -q . && return 0
+	return 1
+}
+
+# Delete every entry for the two /1 prefixes (a crash/respawn cycle can leave
+# duplicates); bounded so a persistent kernel error cannot loop forever.
+flush_wildcard_routes() {
+	local p n=0
+	for p in 0.0.0.0/1 128.0.0.0/1; do
+		while ip route show "$p" 2>/dev/null | grep -q .; do
+			ip route del "$p" 2>/dev/null || break
+			n=$((n+1)); [ "$n" -gt 20 ] && break
+		done
+	done
+}
+
+ensure_lan_wan() {
+	local i c s d found=0 f
+	c=$(uci -q show firewall 2>/dev/null | grep -c '=forwarding$'); [ -n "$c" ] || c=0
+	i=0
+	while [ "$i" -lt "$c" ]; do
+		s=$(uci -q get "firewall.@forwarding[$i].src"  2>/dev/null)
+		d=$(uci -q get "firewall.@forwarding[$i].dest" 2>/dev/null)
+		[ "$s" = "lan" ] && [ "$d" = "wan" ] && { found=1; break; }
+		i=$((i+1))
+	done
+	if [ "$found" = 0 ]; then
+		f=$(uci add firewall forwarding) || return 1
+		uci set "firewall.$f.src=lan"
+		uci set "firewall.$f.dest=wan"
+		uci commit firewall
+		/etc/init.d/firewall reload >/dev/null 2>&1
+		log "fall-open: restored lan->wan forwarding"
+	fi
+}
+
+# Tear the tunnel down and put the router back on plain internet. Runs detached
+# from any procd instance, so stopping ZET here cannot kill this process before
+# the recovery below completes. Order matters: stop ZET FIRST so it stops
+# re-installing its routes, THEN flush, THEN restore forwarding.
+fall_open() {
+	local reason="$1"
+	log "FALL-OPEN ($reason): restoring direct internet"
+	pidof ziti-edge-tunnel >/dev/null 2>&1 && "$INIT" stop >/dev/null 2>&1
+	flush_wildcard_routes
+	ensure_lan_wan
+	if routes_present; then
+		# ZET may have re-added a route in the stop window; try once more.
+		flush_wildcard_routes
+	fi
+	if routes_present; then
+		log "FALL-OPEN WARNING: /1 routes still present after teardown -- clients may still black-hole"
+		write_state "fall-open INCOMPLETE ($reason): /1 routes persist"
+	else
+		write_state "fall-open ($reason): on direct internet"
+	fi
+}
+
+# ---- failure counter ----
+read_failures()  { local n; n=$(cat "$FAIL_FILE" 2>/dev/null | grep -E '^[0-9]+$'); [ -n "$n" ] || n=0; echo "$n"; }
+bump_failures()  { local n; n=$(read_failures); n=$((n+1)); echo "$n" > "$FAIL_FILE" 2>/dev/null || true; echo "$n"; }
+clear_failures() { rm -f "$FAIL_FILE" 2>/dev/null || true; }
+
+# ---- subcommands ----
+cmd_preflight() {
+	[ "$(cfg_verify)" = 1 ] || { write_state "preflight: verify disabled"; return 0; }
+	[ "$(cfg_mode)" = "full" ] || { write_state "preflight: split mode, no gate"; return 0; }
+
+	refresh_hosts
+	if ctrl_reachable; then
+		write_state "preflight: controller reachable, starting"
+		log "preflight: a controller is reachable; proceeding to start ZET"
+		return 0
+	fi
+	fall_open "no controller reachable at boot"
+	return 1
+}
+
+cmd_verify() {
+	[ "$(cfg_verify)" = 1 ] || { write_state "verify: disabled"; return 0; }
+	[ "$(cfg_mode)" = "full" ] || { write_state "verify: split mode"; return 0; }
+
+	local tries interval i=0
+	tries=$(cfg_tries); interval=$(cfg_interval)
+	while [ "$i" -lt "$tries" ]; do
+		if pidof ziti-edge-tunnel >/dev/null 2>&1 && ctrl_reachable && egress_ok; then
+			clear_failures
+			write_state "verify: PASS (tunnel carries data)"
+			log "verify: tunnel verified end to end; staying fail-closed"
+			return 0
+		fi
+		i=$((i+1))
+		sleep "$interval"
+	done
+
+	fall_open "tunnel did not carry data within verification window"
+	local n max
+	n=$(bump_failures); max=$(cfg_maxfail)
+	log "verify: FAIL ($n/$max consecutive boot failures)"
+	if [ "$n" -ge "$max" ]; then
+		"$INIT" disable >/dev/null 2>&1
+		write_state "verify: FAIL x$n -- boot-autostart DISABLED"
+		log "verify: reached $max failures; disabled boot-autostart"
+	fi
+	return 1
+}
+
+case "${1:-}" in
+	refresh-hosts) refresh_hosts ;;
+	preflight)     cmd_preflight ;;
+	verify)        cmd_verify ;;
+	*) echo "usage: ziti-boot-guard {refresh-hosts|preflight|verify}" >&2; exit 2 ;;
+esac

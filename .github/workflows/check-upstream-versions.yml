@@ -1,0 +1,45 @@
+# Track upstream OpenZiti releases and auto-open a PR when ziti-edge-tunnel has
+# a newer version. Per project rule this YAML is glue only -- all logic lives in
+# tools/check-upstream-versions.sh, which a maintainer can run locally.
+name: check-upstream-versions
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check upstream versions (auto-bump ziti-edge-tunnel)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/check-upstream-versions.sh | tee upstream-summary.md
+
+      - name: Detect whether a bump was made
+        id: diff
+        run: |
+          if git diff --quiet -- package/; then
+            echo "changed=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open bump PR
+        if: steps.diff.outputs.changed == '1'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: bump/ziti-edge-tunnel
+          delete-branch: true
+          commit-message: "chore: bump ziti-edge-tunnel to latest upstream release"
+          title: "chore: bump ziti-edge-tunnel to latest upstream release"
+          body-path: upstream-summary.md
+          add-paths: package/**
