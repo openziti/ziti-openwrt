@@ -34,6 +34,22 @@ config ziti 'main'
 	# option watchdog_interval '10'
 	# option watchdog_fails '3'
 	# option watchdog_grace '20'
+	# --- OpenZiti DNS integration (optional; bulletproof by design) ---
+	# dnsmasq ALWAYS keeps its own direct default resolver. These options only
+	# ADD per-domain forwarding of the named domains to ZET's resolver. If ZET is
+	# down, only these domains fail to resolve; all other DNS is unaffected --
+	# there is no way for this to cause a general DNS outage.
+	# Domains handed to ZET (repeat for several; e.g. your overlay + home domain):
+	# list ziti_dns_domains 'ziti'
+	# list ziti_dns_domains 'parkplace-via-dhcp'
+	# Where ZET forwards names that are NOT Ziti services -- e.g. your home DNS
+	# server, reached over the tunnel so home names resolve as-at-home. Leave
+	# empty for ZET's own default.
+	# option dns_upstream '192.168.1.5'
+	# ZET resolver address dnsmasq forwards the domains to. The tunneler puts its
+	# resolver at the .2 of the DNS range (100.64.0.2 for the default
+	# 100.64.0.0/10). Change only if you set a custom dns-ip-range.
+	# option dns_resolver_ip '100.64.0.2'
 
 # Example -- gets written automatically by the LuCI Identities tab on
 # successful enroll, OR you can hand-edit after a CLI enroll:

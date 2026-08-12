@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ziti-edge-tunnel
 PKG_VERSION:=1.18.1
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openziti/ziti-tunnel-sdk-c/tar.gz/refs/tags/v$(PKG_VERSION)?

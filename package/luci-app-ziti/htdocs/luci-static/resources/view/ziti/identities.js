@@ -4,7 +4,7 @@
 'require rpc';
 'require ui';
 
-var UI_BUILD = 'ui 20260812-013502';
+var UI_BUILD = 'ui 20260812-175409';
 
 var callList = rpc.declare({
 	object: 'ziti',

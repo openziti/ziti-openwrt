@@ -63,6 +63,18 @@ cfg_wd_probes() {
 	echo "$p"
 }
 
+# ---- DNS integration knobs ----
+# Domains whose lookups dnsmasq hands to ZET's resolver. A UCI list or a
+# comma/space string. Empty = DNS integration off (dns-sync becomes a no-op).
+cfg_dns_domains() {
+	uci -q get ziti.main.ziti_dns_domains 2>/dev/null | tr ',' ' '
+}
+# ZET's embedded resolver address that dnsmasq forwards those domains to. The C
+# tunneler puts its resolver at the .2 of the DNS range (100.64.0.2 for the
+# default 100.64.0.0/10) -- it adds exactly that to /etc/resolv.conf on start --
+# and routes it into ziti0. NOT .1 (that is the tun's own local IP).
+cfg_dns_resolver() { local n; n=$(uci_get dns_resolver_ip); [ -n "$n" ] || n="100.64.0.2"; echo "$n"; }
+
 write_state() { echo "$1" > "$STATE_FILE" 2>/dev/null || true; }
 
 is_ipv4() { echo "$1" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; }
@@ -363,10 +375,56 @@ cmd_watchdog() {
 	done
 }
 
+# ---- DNS integration ----
+# Program dnsmasq to hand the configured Ziti/home domains to ZET's resolver,
+# while leaving dnsmasq's own default upstream (general DNS) completely untouched.
+# This is the BULLETPROOF part: it only ever ADDS per-domain forwards. If ZET is
+# down, only those domains fail; every other name still resolves via dnsmasq's
+# direct default. Nothing here can cause a general DNS outage. Idempotent:
+# rebuilds only its own entries (server rules pointing at the resolver IP) each run.
+dns_sync() {
+	local rip d s changed=0 domains
+	rip=$(cfg_dns_resolver)
+	domains=$(cfg_dns_domains)
+
+	# dnsmasq binds ziti0's IP by default, which would occupy the resolver
+	# address; exclude ziti0 so ZET's own resolver can serve it. LAN binds are
+	# unaffected -- this cannot break general DNS.
+	if ! uci -q get dhcp.@dnsmasq[0].notinterface 2>/dev/null | grep -qw ziti0; then
+		uci add_list "dhcp.@dnsmasq[0].notinterface=ziti0" 2>/dev/null && changed=1
+	fi
+
+	# Remove our previous per-domain forwards: any server rule pointing into the
+	# Ziti DNS range (100.64.0.0/10, CGNAT space -- never a real upstream). This
+	# also cleans up entries from a changed resolver IP. Leaves the user's own
+	# default/other upstreams alone.
+	for s in $(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null); do
+		case "$s" in
+			*/100.64.*) uci del_list "dhcp.@dnsmasq[0].server=$s" 2>/dev/null && changed=1 ;;
+		esac
+	done
+
+	# Add a fresh per-domain forward for each configured domain.
+	for d in $domains; do
+		case "$d" in *[!A-Za-z0-9._-]*|"") continue ;; esac
+		uci add_list "dhcp.@dnsmasq[0].server=/$d/$rip" 2>/dev/null && changed=1
+	done
+
+	if [ "$changed" = 1 ]; then
+		uci commit dhcp
+		/etc/init.d/dnsmasq reload >/dev/null 2>&1
+		log "dns-sync: forwarding [${domains:-none}] -> $rip (dnsmasq reloaded, default upstream untouched)"
+	else
+		log "dns-sync: no change"
+	fi
+	return 0
+}
+
 case "${1:-}" in
 	refresh-hosts) refresh_hosts ;;
 	preflight)     cmd_preflight ;;
 	verify)        cmd_verify ;;
 	watchdog)      cmd_watchdog ;;
-	*) echo "usage: ziti-boot-guard {refresh-hosts|preflight|verify|watchdog}" >&2; exit 2 ;;
+	dns-sync)      dns_sync ;;
+	*) echo "usage: ziti-boot-guard {refresh-hosts|preflight|verify|watchdog|dns-sync}" >&2; exit 2 ;;
 esac
