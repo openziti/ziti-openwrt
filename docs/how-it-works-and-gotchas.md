@@ -38,6 +38,19 @@ Consequences of OpenZiti being an application-layer (L4) overlay, not an IP/pack
   (`#travel-clients`) says who may use. Add a new traveling device by creating an identity with `-a travel-clients` --
   no policy edits, ever.
 
+The packaged safeguards, layered on top of that datapath (all live-verified on a GL-BE3600):
+
+- Boot preflight: before starting ZET in full mode, the init refreshes controller pins in `/etc/hosts` and confirms a
+  controller is reachable on the current uplink. If not, it falls open (never installs the `/1` routes) so a dead
+  controller or captive portal cannot black-hole the wifi.
+- Continuous resilience watchdog (`ziti-guard`): probes egress THROUGH the tunnel every ~10s whenever the wildcard
+  intercept is live, and falls open to direct internet if the tunnel stops carrying data mid-session.
+- DNS integration: adds per-domain forwarding of chosen (overlay + home) domains to ZET's resolver while leaving
+  dnsmasq's own default resolver untouched, so private Ziti names and home names resolve as-at-home without ever
+  risking general DNS.
+
+Everything falls OPEN. The hard rule is that the wifi/internet -- and especially DNS -- must never stop.
+
 ## 2. The engine decision: ZET (TUN), not ziti-router tproxy
 
 You might expect the "edge-router-with-tunneler in tproxy mode" to be the LAN-gateway tool -- it is the canonical way
@@ -88,11 +101,48 @@ of CIDR/hostname services, and for the exit side in `host` mode.
   when the tunnel is up because the resolver then routes via `ziti0`). Related: openziti/ziti #2400 -- a wide
   intercept must not swallow the system's DNS-upstream IP; pin the controller by IP so ZET never needs public DNS.
 
-### Location-correct DNS
+### Location-correct DNS (superseded by the packaged DNS integration)
 - For home-only or source-IP-restricted services to resolve to the same endpoints they would at home, DNS must
-  resolve from the exit's vantage point, not the local uplink. Point the router's dnsmasq upstream at a public
-  resolver so the query itself tunnels and resolves as-if-home. (Egress IP being home is necessary but not
-  sufficient; DNS steering matters too.)
+  resolve from the exit's vantage point, not the local uplink. The EARLY approach was to point the router's dnsmasq
+  upstream at a public resolver so the query itself tunnels. That works but is NOT bulletproof -- if dnsmasq's ONLY
+  upstream is the tunnel and ZET dies, all DNS dies.
+- The shipped approach is additive and bulletproof: dnsmasq ALWAYS keeps its own direct default resolver; the package
+  only ADDS per-domain forwarding of chosen domains to ZET's resolver, and points ZET's `--dns-upstream` at your home
+  resolver (a home LAN IP, which is itself inside the wildcard intercept, so the lookup rides the tunnel and resolves
+  as-at-home). If ZET is down, ONLY those domains fail; general DNS is untouched. NEVER point dnsmasq's only upstream
+  at ZET. See `ziti-boot-guard dns-sync` and the two gotchas below.
+
+### ZET's DNS resolver is at the .2 of the range, not .1
+- Symptom: you free `100.64.0.1:53` from dnsmasq and point a per-domain forward at it, and every forwarded name times
+  out -- nothing is listening.
+- Cause: the C tunneler's embedded resolver lives at the `.2` of the `--dns-ip-range` (`100.64.0.2` for the default
+  `100.64.0.0/10`), NOT `.1`. `.1` is the tun's own local interface IP, so a packet to `100.64.0.1` is delivered
+  locally to whatever binds it (nothing, once dnsmasq is excluded), never routed into the tun. ZET proves this itself:
+  on start it adds `nameserver 100.64.0.2` to `/etc/resolv.conf`, and there is a `100.64.0.0/10 dev ziti0` route so
+  `.2` routes INTO ziti0 where lwIP answers it.
+- Fix: forward to `100.64.0.2` (the `dns_resolver_ip` default). Confirm with
+  `logread -e ziti-edge-tunnel | grep -i dns` (look for the `--dns-upstream is set` line) and `cat /etc/resolv.conf`.
+
+### dnsmasq binds ziti0's IP and squats the resolver address
+- Symptom: nothing can serve on the ziti resolver address because dnsmasq already holds `100.64.0.1:53` /
+  `100.64.0.2:53`.
+- Cause: OpenWrt dnsmasq binds every interface's IP by default, including `ziti0`.
+- Fix: `dns-sync` adds `notinterface ziti0` to the dnsmasq UCI config so it stops binding ziti0 (LAN binds are
+  unaffected -- this cannot break general DNS), then reloads dnsmasq. `netstat -lnup | grep :53` afterward should no
+  longer show dnsmasq on the ziti0 address.
+
+### The mid-session black-hole (why the watchdog is continuous, not boot-only)
+- Symptom: full-tunnel is up and working, then later all client traffic dies -- and stays dead until you manually
+  stop ZET.
+- Cause: the exit terminator died WHILE the tunnel was up (ZDEW silently drops its terminator on reboot). ZET kept the
+  `/1` intercept routes installed with no live exit, so every client flow entered `ziti0` and was dropped. A boot-only
+  guard never fires because nothing rebooted.
+- Fix: the `ziti-guard` continuous watchdog. Its trigger is ROUTE-BASED -- it guards whenever `0.0.0.0/1` is actually
+  routed via `ziti0` (full-tunnel live), independent of any `tunnel_mode` UCI flag, because the device's full-tunnel
+  comes from an enrolled wildcard identity rather than the LuCI toggle. It probes egress THROUGH the tunnel every
+  ~10s; after 3 straight failures it falls open (stop ZET, flush the `/1` routes, restore `lan->wan`) and STAYS open.
+  It runs as its OWN procd service so that its fall-open -- which stops ZET -- cannot kill the process doing the
+  recovery.
 
 ### Captive portals
 - Hotel/airport portals intercept HTTP to a local or public address. Directly-connected uplink traffic stays direct

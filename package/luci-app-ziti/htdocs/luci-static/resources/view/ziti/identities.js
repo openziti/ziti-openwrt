@@ -3,8 +3,9 @@
 'require view';
 'require rpc';
 'require ui';
+'require zitibuild';
 
-var UI_BUILD = 'ui 20260812-175409';
+var UI_BUILD = zitibuild.BUILD;
 
 var callList = rpc.declare({
 	object: 'ziti',

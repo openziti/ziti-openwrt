@@ -9,7 +9,7 @@ checklist + the resolved/open TODOs.
 | Component             | Version  | Source                                               |
 |-----------------------|----------|------------------------------------------------------|
 | OpenWRT release line  | 23.05.5  | stable, except where target requires SNAPSHOT (below)|
-| ziti-edge-tunnel      | v1.15.1  | github.com/openziti/ziti-tunnel-sdk-c                |
+| ziti-edge-tunnel      | v1.18.1  | github.com/openziti/ziti-tunnel-sdk-c (PKG_RELEASE 4) |
 | ziti (router)         | v1.6.15  | github.com/openziti/ziti, prebuilt linux-{arm64,amd64}|
 
 ## Reconciled cross-package conventions
@@ -122,10 +122,70 @@ during the integration pass:
   Sources" UI steps, `customfeeds.conf` CLI form, and how to install the
   public key under `/etc/opkg/keys/<key-id>` on the device.
 
+## Resolved: on-device safeguards + DNS integration (live on a GL-BE3600)
+
+These were built and live-verified on a GL-BE3600 running full-tunnel from a foreign (cowork) uplink. The
+overarching hard rule across all of them: the wifi/internet -- and especially DNS -- must NEVER stop. Every failure
+path falls open to plain direct internet; fail-closed is only ever the result of a SUCCESSFUL verification.
+
+### Continuous resilience watchdog (`ziti-guard` service) -- was "mid-session black-hole", now resolved
+
+- `/etc/init.d/ziti-guard` is a SEPARATE procd service running `/usr/libexec/ziti-boot-guard watchdog`. It is
+  deliberately not a child of the ziti-edge-tunnel service: its own fall-open calls
+  `/etc/init.d/ziti-edge-tunnel stop`, which would kill a child instance mid-teardown -- so it must outlive that stop.
+- ROUTE-BASED trigger: it acts whenever a wildcard `/1` intercept is actually live on `ziti0`
+  (`ip route show 0.0.0.0/1` contains `ziti0`), i.e. whenever full-tunnel is up -- regardless of whether
+  `tunnel_mode=full` is set in UCI. This matters because the device's full-tunnel comes from an enrolled wildcard
+  identity, not the LuCI toggle.
+- Every `watchdog_interval` (default 10s) it runs `egress_ok`: (1) confirm `0.0.0.0/1` routes via `ziti0`; (2) curl
+  any one of the configurable probe targets over HTTPS through the tunnel (healthy if ANY responds); (3) optional
+  egress-IP assertion. After `watchdog_fails` (default 3) consecutive failures it runs `fall_open` and STAYS open --
+  it does not auto-restart the tunnel, because re-arming a dead exit just black-holes again. `watchdog_grace`
+  (default 20s) delays the first check after a (re)start.
+- `fall_open` is the single owner of failure transitions: stop ZET FIRST (so it stops re-adding routes), flush
+  `0.0.0.0/1`+`128.0.0.0/1`, restore `lan->wan`, reload firewall, re-check and re-flush, log LOUD if routes persist.
+- Driver: a real incident. The exit terminator died mid-session (ZDEW drops its terminator), ZET kept the `/1` routes
+  installed with no working exit, and all client traffic black-holed until a manual stop. The boot-only guard did not
+  catch it because it was mid-session -- hence this continuous watchdog.
+- UI-configurable (LuCI Settings -> Resilience watchdog): `watchdog_probes` (DynamicList), `watchdog_interval`,
+  `watchdog_fails`, `watchdog_timeout`, `watchdog_grace`, `verify_expect_ip`. Read live each tick (except grace).
+
+### Boot guard: preflight + `/etc/hosts` pin refresh
+
+- `preflight` runs in the ziti-edge-tunnel init BEFORE starting ZET (full mode): refresh-hosts, then confirm a
+  controller is reachable over the current uplink; if not, `fall_open` and do NOT start ZET -- so the `/1` routes
+  never install when the tunnel cannot work (no black-hole over a dead controller / captive portal).
+- `refresh-hosts` re-resolves EVERY controller (`ztAPI` + `ztAPIs[]`) across all enabled identities via direct DNS
+  (busybox `nslookup`, bypassing `/etc/hosts`) and rewrites a marker-delimited managed block in `/etc/hosts`. Cleans
+  stale pins (a changed controller IP otherwise blocks ZET from ever connecting). Also runs on enroll (rpcd).
+- Failure counter `/etc/ziti/autostart-failures`; after `max_boot_failures` (3) boot-autostart is disabled. State is
+  surfaced in LuCI status (`guard_state`, `boot_failures`) as a "Last boot check" row.
+
+### OpenZiti DNS integration -- was "DNS coexistence / resolve-as-home" deferred, now resolved
+
+- Bulletproof by design: dnsmasq ALWAYS keeps its own direct default resolver, untouched. We only ADD per-domain
+  forwarding of chosen domains to ZET's resolver. If ZET/the tunnel is down, ONLY those domains fail; all other DNS
+  resolves via dnsmasq's default. No single point of failure, no coupling to the watchdog/fall-open. NEVER point
+  dnsmasq's only upstream at ZET.
+- `ziti-boot-guard dns-sync` programs dnsmasq via UCI: adds `notinterface ziti0` (dnsmasq otherwise binds ziti0's IP
+  and occupies the resolver address), rebuilds `server=/<domain>/<resolver-ip>` entries (removing any server rule
+  pointing into `100.64.0.0/10` first, so a resolver-IP change cleans up), commits, reloads dnsmasq. Idempotent; runs
+  on ZET start.
+- GOTCHA discovered live: ZET's embedded resolver is at the **`.2`** of the DNS range -- `100.64.0.2` for the default
+  `100.64.0.0/10` -- NOT `.1`. `.1` is the tun's own local IP (delivered locally to nothing). ZET adds
+  `nameserver 100.64.0.2` to `/etc/resolv.conf` on start, and `100.64.0.2` routes into `ziti0` (there is a
+  `100.64.0.0/10 dev ziti0` route). dnsmasq must forward to `.2`.
+- ZET is started with `--dns-upstream <ip>` (e.g. a home pi-hole at a home LAN IP). Non-Ziti-service names hitting
+  ZET's resolver are forwarded there; because the home resolver IP is itself inside the wildcard intercept, that query
+  rides the tunnel and resolves at home. Ziti service names (e.g. `name.svc.0.ziti`) resolve to synthetic `100.64.x`.
+- UCI: `ziti_dns_domains` (list of domains, e.g. an overlay suffix + a home DHCP domain), `dns_upstream` (home
+  resolver), `dns_resolver_ip` (default `100.64.0.2`). LuCI: "OpenZiti DNS" settings section. Changes take effect on
+  the next ziti-edge-tunnel restart (init runs `dns-sync` on start).
+- Proven live from the cowork facility: a home name resolved via the home pi-hole over the tunnel to its home LAN IP;
+  a Ziti service name resolved to a synthetic `100.64.x`; a public name resolved via dnsmasq's default (unaffected).
+
 ## Deferred (not blocking first build)
 
-- DNS coexistence with dnsmasq when ZET interception is enabled. Punted to
-  user docs; recommend forwarding a zone to ZET's resolver.
 - Live per-identity controller / connection status in LuCI (needs ZET IPC
   socket integration). Today only service-level status is shown.
 - `.pot` translation extraction for LuCI app.

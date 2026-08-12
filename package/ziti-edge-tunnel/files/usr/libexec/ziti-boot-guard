@@ -59,7 +59,9 @@ cfg_wd_timeout()  { local n; n=$(uci_get watchdog_timeout);  [ -n "$n" ] || n=5;
 cfg_wd_probes() {
 	local p
 	p=$(uci -q get ziti.main.watchdog_probes 2>/dev/null | tr ',' ' ')
-	[ -n "$p" ] || p="1.1.1.1 8.8.8.8 9.9.9.9"
+	# Defaults span both /1 halves: 208.67.222.222 (OpenDNS) sits in 128.0.0.0/1
+	# so at least one probe exercises the upper half, not only 0.0.0.0/1.
+	[ -n "$p" ] || p="1.1.1.1 8.8.8.8 9.9.9.9 208.67.222.222"
 	echo "$p"
 }
 
@@ -226,7 +228,11 @@ routes_present() {
 # what the watchdog keys on -- not a UCI flag -- so it cannot be fooled by a
 # full-tunnel that never set the flag.
 wildcard_active() {
-	ip route show 0.0.0.0/1 2>/dev/null | grep -qw ziti0
+	# BOTH halves must be on ziti0. Checking only 0.0.0.0/1 would read healthy
+	# with a half-installed intercept while 128.0.0.0/1 bypasses the tunnel.
+	ip route show 0.0.0.0/1   2>/dev/null | grep -qw ziti0 || return 1
+	ip route show 128.0.0.0/1 2>/dev/null | grep -qw ziti0 || return 1
+	return 0
 }
 
 # Delete every entry for the two /1 prefixes (a crash/respawn cycle can leave
@@ -383,24 +389,34 @@ cmd_watchdog() {
 # direct default. Nothing here can cause a general DNS outage. Idempotent:
 # rebuilds only its own entries (server rules pointing at the resolver IP) each run.
 dns_sync() {
-	local rip d s changed=0 domains
+	local rip d s t changed=0 domains
 	rip=$(cfg_dns_resolver)
 	domains=$(cfg_dns_domains)
 
 	# dnsmasq binds ziti0's IP by default, which would occupy the resolver
 	# address; exclude ziti0 so ZET's own resolver can serve it. LAN binds are
-	# unaffected -- this cannot break general DNS.
-	if ! uci -q get dhcp.@dnsmasq[0].notinterface 2>/dev/null | grep -qw ziti0; then
-		uci add_list "dhcp.@dnsmasq[0].notinterface=ziti0" 2>/dev/null && changed=1
+	# unaffected -- this cannot break general DNS. Symmetric: added only while DNS
+	# integration is on (domains configured), removed when it is switched off.
+	if [ -n "$domains" ]; then
+		if ! uci -q get dhcp.@dnsmasq[0].notinterface 2>/dev/null | grep -qw ziti0; then
+			uci add_list "dhcp.@dnsmasq[0].notinterface=ziti0" 2>/dev/null && changed=1
+		fi
+	else
+		if uci -q get dhcp.@dnsmasq[0].notinterface 2>/dev/null | grep -qw ziti0; then
+			uci del_list "dhcp.@dnsmasq[0].notinterface=ziti0" 2>/dev/null && changed=1
+		fi
 	fi
 
-	# Remove our previous per-domain forwards: any server rule pointing into the
-	# Ziti DNS range (100.64.0.0/10, CGNAT space -- never a real upstream). This
-	# also cleans up entries from a changed resolver IP. Leaves the user's own
-	# default/other upstreams alone.
+	# Remove our previous per-domain forwards. We own an entry when its TARGET
+	# (the last /-segment) is a Ziti resolver address in 100.64.0.0/10 -- match on
+	# the target IP, NOT a substring of the whole rule, so a user domain that
+	# merely starts with "100.64" is never touched, and a changed resolver IP is
+	# still cleaned. Real upstreams are never in this CGNAT range.
 	for s in $(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null); do
-		case "$s" in
-			*/100.64.*) uci del_list "dhcp.@dnsmasq[0].server=$s" 2>/dev/null && changed=1 ;;
+		t=${s##*/}
+		case "$t" in
+			100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*)
+				uci del_list "dhcp.@dnsmasq[0].server=$s" 2>/dev/null && changed=1 ;;
 		esac
 	done
 
