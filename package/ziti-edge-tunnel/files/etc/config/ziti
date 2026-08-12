@@ -26,6 +26,14 @@ config ziti 'main'
 	# Post-start verification window: verify_tries * verify_interval seconds.
 	# option verify_tries '12'
 	# option verify_interval '5'
+	# Continuous watchdog (ziti-guard service): in full mode it re-checks egress
+	# through the tunnel every watchdog_interval seconds and, after watchdog_fails
+	# consecutive failures, falls back to direct internet -- so an exit that dies
+	# mid-session cannot black-hole the wifi. watchdog_grace delays the first
+	# check after a (re)start so ZET has time to connect.
+	# option watchdog_interval '10'
+	# option watchdog_fails '3'
+	# option watchdog_grace '20'
 
 # Example -- gets written automatically by the LuCI Identities tab on
 # successful enroll, OR you can hand-edit after a CLI enroll:

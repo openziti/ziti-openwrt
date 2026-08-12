@@ -49,6 +49,19 @@ cfg_expect_ip() { uci_get verify_expect_ip; }
 cfg_maxfail()   { local n; n=$(uci_get max_boot_failures); [ -n "$n" ] || n=3; echo "$n"; }
 cfg_tries()     { local n; n=$(uci_get verify_tries); [ -n "$n" ] || n=12; echo "$n"; }
 cfg_interval()  { local n; n=$(uci_get verify_interval); [ -n "$n" ] || n=5; echo "$n"; }
+cfg_wd_interval() { local n; n=$(uci_get watchdog_interval); [ -n "$n" ] || n=10; echo "$n"; }
+cfg_wd_fails()    { local n; n=$(uci_get watchdog_fails);    [ -n "$n" ] || n=3;  echo "$n"; }
+cfg_wd_grace()    { local n; n=$(uci_get watchdog_grace);    [ -n "$n" ] || n=20; echo "$n"; }
+cfg_wd_timeout()  { local n; n=$(uci_get watchdog_timeout);  [ -n "$n" ] || n=5;  echo "$n"; }
+# Probe targets: a UCI list OR a comma/space string. NOT run through the
+# whitespace strip in uci_get -- we need the separators. `uci get` on a list
+# option returns the entries space-joined; commas are normalized to spaces too.
+cfg_wd_probes() {
+	local p
+	p=$(uci -q get ziti.main.watchdog_probes 2>/dev/null | tr ',' ' ')
+	[ -n "$p" ] || p="1.1.1.1 8.8.8.8 9.9.9.9"
+	echo "$p"
+}
 
 write_state() { echo "$1" > "$STATE_FILE" 2>/dev/null || true; }
 
@@ -164,18 +177,24 @@ ctrl_reachable() {
 #   2. A well-known TCP/443 endpoint must answer (proves the exit carries data).
 # Optional verify_expect_ip additionally asserts we egressed from the exit.
 egress_ok() {
-	local expect ip
-	if ! ip route get 1.1.1.1 2>/dev/null | grep -qw ziti0; then
-		log "verify: 1.1.1.1 is not routed via ziti0 (intercept routes absent)"
+	local expect ip p to ok=0
+	to=$(cfg_wd_timeout)
+	# The wildcard intercept must actually be routing to ziti0, else a partial
+	# ZET (connected but no routes installed) would pass on the plain WAN uplink.
+	if ! wildcard_active; then
+		log "verify: wildcard /1 not routed via ziti0 (intercept absent)"
 		return 1
 	fi
-	if ! curl -k -sS -m 8 -o /dev/null "https://1.1.1.1/" 2>/dev/null \
-	   && ! curl -k -sS -m 8 -o /dev/null "https://8.8.8.8/" 2>/dev/null; then
-		return 1
-	fi
+	# Healthy if ANY configured probe returns data THROUGH the tunnel. Multiple
+	# targets stop one probe host being down/blocked from false-tripping fallback.
+	for p in $(cfg_wd_probes); do
+		case "$p" in *[!A-Za-z0-9.:-]*|"") continue ;; esac
+		if curl -k -sS -m "$to" -o /dev/null "https://$p/" 2>/dev/null; then ok=1; break; fi
+	done
+	[ "$ok" = 1 ] || return 1
 	expect=$(cfg_expect_ip)
 	if [ -n "$expect" ]; then
-		ip=$(curl -sS -m 8 https://api.ipify.org 2>/dev/null | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+		ip=$(curl -sS -m "$to" https://api.ipify.org 2>/dev/null | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$')
 		[ "$ip" = "$expect" ] || { log "verify: egress IP '$ip' != expected '$expect'"; return 1; }
 	fi
 	return 0
@@ -186,6 +205,16 @@ routes_present() {
 	ip route show 0.0.0.0/1   2>/dev/null | grep -q . && return 0
 	ip route show 128.0.0.0/1 2>/dev/null | grep -q . && return 0
 	return 1
+}
+
+# The actual black-hole condition: a wildcard /1 intercept is installed pointing
+# at ziti0, so ALL client internet is captured by the tunnel. True whenever
+# full-tunnel is live, regardless of whether it was set via the LuCI toggle
+# (ziti.main.tunnel_mode) or directly by an enrolled wildcard identity. This is
+# what the watchdog keys on -- not a UCI flag -- so it cannot be fooled by a
+# full-tunnel that never set the flag.
+wildcard_active() {
+	ip route show 0.0.0.0/1 2>/dev/null | grep -qw ziti0
 }
 
 # Delete every entry for the two /1 prefixes (a crash/respawn cycle can leave
@@ -291,9 +320,53 @@ cmd_verify() {
 	return 1
 }
 
+# Continuous watchdog. Runs forever as its own procd service (ziti-guard), NOT
+# as a child of the ziti-edge-tunnel service -- so its own fall_open -> $INIT
+# stop cannot kill it. Every interval, in full mode with ZET running, it proves
+# egress still returns data THROUGH the tunnel. After watchdog_fails consecutive
+# failures it falls open (stop ZET, flush /1, restore lan->wan) and STAYS open:
+# it does not auto-restart the tunnel, because re-arming a dead exit would just
+# black-hole the wifi again. The user re-enables from LuCI once the exit is back.
+# This is the mid-session counterpart to the boot-time preflight/verify -- the
+# case where an exit dies while the tunnel is already up (the ZDEW-drops-its-
+# terminator failure) and would otherwise black-hole until a manual stop.
+cmd_watchdog() {
+	local interval fails n=0
+	log "watchdog: started (interval=$(cfg_wd_interval)s, trip=$(cfg_wd_fails) fails)"
+	# Initial grace: let a just-started ZET connect and install routes before we
+	# start judging it. This subsumes the old one-shot boot verify.
+	sleep "$(cfg_wd_grace)"
+	while true; do
+		# Re-read interval/fails each tick so UI changes take effect live.
+		interval=$(cfg_wd_interval); fails=$(cfg_wd_fails)
+		# Guard whenever a wildcard intercept is actually live -- route-based, not
+		# UCI-flag-based -- so a full-tunnel set up by an enrolled identity (no
+		# tunnel_mode flag) is protected exactly the same as the LuCI toggle.
+		if [ "$(cfg_verify)" = 1 ] && pidof ziti-edge-tunnel >/dev/null 2>&1 && wildcard_active; then
+			if egress_ok; then
+				[ "$n" -gt 0 ] && log "watchdog: egress recovered"
+				n=0
+			else
+				n=$((n+1))
+				log "watchdog: egress check failed ($n/$fails)"
+				if [ "$n" -ge "$fails" ]; then
+					fall_open "watchdog: tunnel stopped carrying data mid-session"
+					n=0
+					# Stay open. Next loops see ZET stopped and idle.
+				fi
+			fi
+		else
+			# Nothing to guard (split mode, ZET stopped, or verify disabled).
+			n=0
+		fi
+		sleep "$interval"
+	done
+}
+
 case "${1:-}" in
 	refresh-hosts) refresh_hosts ;;
 	preflight)     cmd_preflight ;;
 	verify)        cmd_verify ;;
-	*) echo "usage: ziti-boot-guard {refresh-hosts|preflight|verify}" >&2; exit 2 ;;
+	watchdog)      cmd_watchdog ;;
+	*) echo "usage: ziti-boot-guard {refresh-hosts|preflight|verify|watchdog}" >&2; exit 2 ;;
 esac

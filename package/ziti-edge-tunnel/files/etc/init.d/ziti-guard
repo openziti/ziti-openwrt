@@ -1,0 +1,28 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2026 OpenZiti contributors
+# Apache-2.0
+#
+# Continuous resilience watchdog for full-tunnel mode. Runs the boot guard's
+# `watchdog` loop as its OWN procd service -- deliberately separate from the
+# ziti-edge-tunnel service, so the watchdog's own fall-open (which calls
+# `/etc/init.d/ziti-edge-tunnel stop`) cannot kill the process performing the
+# recovery. procd respawns it if it ever dies.
+#
+# It is a no-op in split mode / when ZET is stopped / when boot_verify=0, so it
+# is always safe to leave enabled.
+
+START=99
+STOP=10
+USE_PROCD=1
+
+GUARD=/usr/libexec/ziti-boot-guard
+
+start_service() {
+	[ -x "$GUARD" ] || return 0
+	procd_open_instance ziti-guard
+	procd_set_param command "$GUARD" watchdog
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}

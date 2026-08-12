@@ -74,15 +74,11 @@ start_service() {
 	procd_set_param file /etc/config/ziti
 	procd_close_instance
 
-	# Post-start verification proves egress actually returns data through the
-	# tunnel; if not, it falls open. It runs DETACHED (reparented to init), NOT
-	# as a procd instance, on purpose: its fall-open path calls `$INIT stop`, and
-	# a procd child instance would be killed by that stop mid-teardown -- before
-	# it could restore lan->wan. A detached job is outside procd's instance
-	# tracking, so stopping ZET cannot kill the process doing the recovery.
-	if [ -x "$GUARD" ]; then
-		( "$GUARD" verify ) >/dev/null 2>&1 &
-	fi
+	# Post-start + mid-session verification is handled by the separate ziti-guard
+	# service (continuous watchdog), not here -- it must outlive this service so
+	# its own fall-open can stop ZET without killing the recovery process. Make
+	# sure it is running so a fresh start is watched immediately.
+	[ -x /etc/init.d/ziti-guard ] && /etc/init.d/ziti-guard enabled 2>/dev/null && /etc/init.d/ziti-guard start >/dev/null 2>&1
 }
 
 reload_service() {

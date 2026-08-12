@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ziti-edge-tunnel
 PKG_VERSION:=1.18.1
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openziti/ziti-tunnel-sdk-c/tar.gz/refs/tags/v$(PKG_VERSION)?
@@ -96,6 +96,7 @@ define Package/ziti-edge-tunnel/install
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/ziti-edge-tunnel $(1)/etc/init.d/ziti-edge-tunnel
+	$(INSTALL_BIN) ./files/etc/init.d/ziti-guard $(1)/etc/init.d/ziti-guard
 
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) ./files/usr/libexec/ziti-boot-guard $(1)/usr/libexec/ziti-boot-guard
@@ -111,6 +112,14 @@ define Package/ziti-edge-tunnel/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 chmod 0700 /etc/ziti/identities 2>/dev/null
+
+# Always-on resilience watchdog: enable + start so full-tunnel mode can never
+# black-hole the wifi indefinitely (it falls open when the tunnel stops carrying
+# data). Safe in split mode / when ZET is stopped (it idles).
+if [ -x /etc/init.d/ziti-guard ]; then
+	/etc/init.d/ziti-guard enable 2>/dev/null
+	/etc/init.d/ziti-guard start 2>/dev/null
+fi
 
 # Create the 'ziti' system group if missing. ZET expects it to exist
 # for its IPC socket server (`tunnel_status` etc); without it the
