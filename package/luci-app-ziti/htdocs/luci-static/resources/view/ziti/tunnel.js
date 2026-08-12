@@ -5,7 +5,7 @@
 'require ui';
 
 var DOC_URL = 'https://openziti.github.io/ziti-openwrt/';
-var UI_BUILD = 'ui 20260812-013502';
+var UI_BUILD = 'ui 20260812-175409';
 
 var callGet = rpc.declare({
 	object: 'ziti', method: 'get_tunnel_mode', expect: { }

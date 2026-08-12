@@ -7,7 +7,7 @@
 'require ui';
 'require dom';
 
-var UI_BUILD = 'ui 20260812-013502';
+var UI_BUILD = 'ui 20260812-175409';
 
 var callCheck = rpc.declare({
 	object: 'ziti', method: 'check_update', expect: { }
@@ -70,6 +70,28 @@ return view.extend({
 			_('If set, a probe only counts as healthy when traffic egresses from this IP -- proving it tunneled ' +
 			  'rather than leaked to the local uplink. Leave blank to skip.'));
 		o.datatype = 'ip4addr'; o.placeholder = '203.0.113.10';
+
+		var ds = m.section(form.NamedSection, 'main', 'ziti', _('OpenZiti DNS'),
+			_('Optionally hand chosen domains to the Ziti resolver so private overlay and home names resolve ' +
+			  'through the tunnel. dnsmasq keeps its own default resolver for everything else -- if the tunnel ' +
+			  'is down, only these domains fail, never general DNS. Changes take effect on the next ' +
+			  'ziti-edge-tunnel restart.'));
+		ds.anonymous = true;
+
+		o = ds.option(form.DynamicList, 'ziti_dns_domains', _('Ziti domains'),
+			_('Domains whose lookups go to the Ziti resolver -- e.g. your overlay suffix and your home DHCP ' +
+			  'domain. Empty = DNS integration off.'));
+		o.placeholder = 'ziti';
+
+		o = ds.option(form.Value, 'dns_upstream', _('ZET DNS upstream (optional)'),
+			_('Where ZET forwards names that are not Ziti services -- e.g. your home DNS server, reached over ' +
+			  'the tunnel so home names resolve as-at-home. Leave blank for ZET\'s default.'));
+		o.datatype = 'ipaddr'; o.placeholder = '192.168.1.5';
+
+		o = ds.option(form.Value, 'dns_resolver_ip', _('Ziti resolver address (advanced)'),
+			_('The ziti-edge-tunnel resolver address dnsmasq forwards to; default 100.64.0.2. Change only if you ' +
+			  'set a custom DNS IP range.'));
+		o.datatype = 'ip4addr'; o.placeholder = '100.64.0.2';
 
 		var results = E('div', { 'style': 'margin:.5em 0' },
 			[ E('em', {}, _('Click "Check for updates" to query the signed feed.')) ]);
