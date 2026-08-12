@@ -32,10 +32,11 @@ verbosity_for() {
 }
 
 start_service() {
-	local enabled log_level
+	local enabled log_level dns_upstream
 	config_load ziti
 	config_get_bool enabled main enabled 1
 	config_get      log_level main log_level INFO
+	config_get      dns_upstream main dns_upstream ''
 
 	[ "$enabled" = "1" ] || {
 		logger -t ziti "ziti.main.enabled=0, not starting"
@@ -68,6 +69,10 @@ start_service() {
 	procd_set_param command "$PROG" run \
 		--identity-dir "$IDENTITY_DIR" \
 		--verbose "$v"
+	# Optional: forward non-Ziti-service DNS to this resolver (e.g. a home
+	# pi-hole reached over the tunnel). Only affects names in the Ziti domains
+	# dnsmasq hands to ZET; general DNS never touches this.
+	[ -n "$dns_upstream" ] && procd_append_param command --dns-upstream "$dns_upstream"
 	procd_set_param respawn 3600 5 0
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -79,6 +84,11 @@ start_service() {
 	# its own fall-open can stop ZET without killing the recovery process. Make
 	# sure it is running so a fresh start is watched immediately.
 	[ -x /etc/init.d/ziti-guard ] && /etc/init.d/ziti-guard enabled 2>/dev/null && /etc/init.d/ziti-guard start >/dev/null 2>&1
+
+	# Program dnsmasq to hand the configured Ziti/home domains to ZET's resolver.
+	# Additive + idempotent; leaves dnsmasq's default upstream untouched, so it
+	# cannot cause a general DNS outage even if ZET never comes up.
+	[ -x "$GUARD" ] && "$GUARD" dns-sync >/dev/null 2>&1
 }
 
 reload_service() {
