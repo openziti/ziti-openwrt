@@ -7,7 +7,7 @@
 'require ui';
 'require dom';
 
-var UI_BUILD = 'ui 20260811-182440';
+var UI_BUILD = 'ui 20260812-013502';
 
 var callCheck = rpc.declare({
 	object: 'ziti', method: 'check_update', expect: { }
@@ -38,6 +38,38 @@ return view.extend({
 		o.value('ERROR', 'ERROR'); o.value('WARN', 'WARN'); o.value('INFO', 'INFO');
 		o.value('DEBUG', 'DEBUG'); o.value('VERBOSE', 'VERBOSE'); o.value('TRACE', 'TRACE');
 		o.default = 'INFO';
+
+		var ws = m.section(form.NamedSection, 'main', 'ziti', _('Resilience watchdog'),
+			_('In full-tunnel mode the router probes egress through the tunnel and, if it stops carrying data, ' +
+			  'falls back to direct internet so the wifi never black-holes. These control that probe.'));
+		ws.anonymous = true;
+
+		o = ws.option(form.DynamicList, 'watchdog_probes', _('Probe targets'),
+			_('IPs (or host[:port]) reachable over HTTPS. The tunnel is judged healthy if ANY one responds, so ' +
+			  'one target being down cannot trip fallback. Default: 1.1.1.1, 8.8.8.8, 9.9.9.9.'));
+		o.datatype = 'host';
+		o.placeholder = '1.1.1.1';
+
+		o = ws.option(form.Value, 'watchdog_interval', _('Check interval (s)'),
+			_('Seconds between probes while full-tunnel is up.'));
+		o.datatype = 'uinteger'; o.placeholder = '10';
+
+		o = ws.option(form.Value, 'watchdog_fails', _('Failures before fallback'),
+			_('Consecutive failed probes before falling back to direct internet.'));
+		o.datatype = 'uinteger'; o.placeholder = '3';
+
+		o = ws.option(form.Value, 'watchdog_timeout', _('Probe timeout (s)'),
+			_('Per-probe HTTPS timeout.'));
+		o.datatype = 'uinteger'; o.placeholder = '5';
+
+		o = ws.option(form.Value, 'watchdog_grace', _('Startup grace (s)'),
+			_('Delay after a (re)start before the first probe, so ziti-edge-tunnel has time to connect.'));
+		o.datatype = 'uinteger'; o.placeholder = '20';
+
+		o = ws.option(form.Value, 'verify_expect_ip', _('Expected egress IP (optional)'),
+			_('If set, a probe only counts as healthy when traffic egresses from this IP -- proving it tunneled ' +
+			  'rather than leaked to the local uplink. Leave blank to skip.'));
+		o.datatype = 'ip4addr'; o.placeholder = '203.0.113.10';
 
 		var results = E('div', { 'style': 'margin:.5em 0' },
 			[ E('em', {}, _('Click "Check for updates" to query the signed feed.')) ]);

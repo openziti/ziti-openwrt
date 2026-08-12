@@ -25,7 +25,7 @@ var callSetAutostart = rpc.declare({
 	expect: { }
 });
 
-var UI_BUILD = 'ui 20260811-182440';
+var UI_BUILD = 'ui 20260812-013502';
 
 return view.extend({
 	handleSaveApply: null,
