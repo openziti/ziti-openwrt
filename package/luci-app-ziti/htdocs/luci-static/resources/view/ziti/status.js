@@ -4,6 +4,7 @@
 'require rpc';
 'require ui';
 'require poll';
+'require zitibuild';
 
 var callZitiStatus = rpc.declare({
 	object: 'ziti',
@@ -25,7 +26,7 @@ var callSetAutostart = rpc.declare({
 	expect: { }
 });
 
-var UI_BUILD = 'ui 20260812-175409';
+var UI_BUILD = zitibuild.BUILD;
 
 return view.extend({
 	handleSaveApply: null,

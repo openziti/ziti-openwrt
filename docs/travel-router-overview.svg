@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 720" font-family="'Segoe UI',Helvetica,Arial,sans-serif" role="img" aria-label="OpenZiti full-tunnel travel router overview">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#0f1a2e"/>
+    </linearGradient>
+    <linearGradient id="router" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12233f"/>
+      <stop offset="1" stop-color="#0e1b30"/>
+    </linearGradient>
+    <linearGradient id="overlay" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0d2f3a"/>
+      <stop offset="1" stop-color="#123a47"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4fd1c5"/>
+    </marker>
+    <marker id="arrowdim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6b86"/>
+    </marker>
+    <style>
+      .title{fill:#eaf2ff;font-size:26px;font-weight:700}
+      .sub{fill:#8aa0c2;font-size:13px}
+      .zone{fill:#9fb3d1;font-size:12px;font-weight:600;letter-spacing:.08em}
+      .box{fill:#e8f0ff;font-size:14px;font-weight:600}
+      .small{fill:#9db2d4;font-size:11.5px}
+      .tag{fill:#0b1220;font-size:11px;font-weight:700}
+      .lbl{fill:#bcd3f2;font-size:11.5px}
+      .teal{fill:#4fd1c5}
+      .amber{fill:#f6c453}
+      .green{fill:#5aa726}
+      .pipe{stroke:#4fd1c5;stroke-width:2.5;fill:none}
+      .pipe-dim{stroke:#5b6b86;stroke-width:2;fill:none;stroke-dasharray:5 4}
+      .card{fill:#16294a;stroke:#26406e;stroke-width:1}
+    </style>
+  </defs>
+
+  <rect width="1180" height="720" fill="url(#bg)"/>
+  <text x="40" y="52" class="title">OpenZiti full-tunnel travel router</text>
+  <text x="40" y="74" class="sub">Non-Ziti clients join the router's wifi and reach home / egress at a chosen exit over the overlay -- with a hard rule: the internet, and DNS, must never stop.</text>
+
+  <!-- ============ CLIENTS ============ -->
+  <text x="60" y="120" class="zone">CLIENTS (no OpenZiti)</text>
+  <rect x="40" y="132" width="150" height="150" rx="12" class="card"/>
+  <text x="60" y="162" class="box">Phone / laptop / TV</text>
+  <text x="60" y="184" class="small">no VPN, no agent</text>
+  <text x="60" y="206" class="small">DHCP + DNS from</text>
+  <text x="60" y="222" class="small">the travel router</text>
+  <rect x="60" y="238" width="110" height="26" rx="6" fill="#0d2f3a" stroke="#1f5d5a"/>
+  <text x="115" y="256" text-anchor="middle" class="teal" font-size="11.5" font-weight="600">appear at home</text>
+
+  <!-- ============ TRAVEL ROUTER ============ -->
+  <text x="300" y="120" class="zone">GL-BE3600 TRAVEL ROUTER</text>
+  <rect x="270" y="132" width="470" height="470" rx="16" fill="url(#router)" stroke="#2b4b80" stroke-width="1.5"/>
+
+  <!-- dnsmasq / DNS split -->
+  <rect x="292" y="156" width="426" height="96" rx="10" class="card"/>
+  <text x="308" y="180" class="box">dnsmasq</text>
+  <text x="308" y="200" class="small">default resolver -- untouched (bulletproof)</text>
+  <text x="308" y="218" class="small">per-domain forward: /ziti/ /parkplace-via-dhcp/ -> 100.64.0.2</text>
+  <text x="308" y="236" class="small">general DNS never depends on the tunnel</text>
+  <rect x="588" y="164" width="120" height="24" rx="6" fill="#13324a" stroke="#1f5d5a"/>
+  <text x="648" y="181" text-anchor="middle" class="teal" font-size="10.5" font-weight="700">DNS-safe by design</text>
+
+  <!-- ZET -->
+  <rect x="292" y="266" width="426" height="120" rx="10" class="card"/>
+  <text x="308" y="290" class="box">ziti-edge-tunnel (ZET)</text>
+  <text x="308" y="310" class="small">TUN + lwIP  ->  ziti0  (100.64.0.1)</text>
+  <text x="308" y="328" class="small">wildcard intercept  0.0.0.0/1 + 128.0.0.0/1</text>
+  <text x="308" y="346" class="small">embedded resolver @ 100.64.0.2  |  --dns-upstream = home pi-hole</text>
+  <text x="308" y="364" class="small">controller + edge routers auto-excluded (stay direct)</text>
+
+  <!-- ziti-guard watchdog -->
+  <rect x="292" y="400" width="207" height="182" rx="10" class="card"/>
+  <text x="308" y="424" class="box">ziti-guard</text>
+  <text x="308" y="442" class="small">continuous watchdog</text>
+  <text x="308" y="462" class="small">own procd service</text>
+  <text x="308" y="480" class="small">trips on the live /1</text>
+  <text x="308" y="498" class="small">route, not a flag</text>
+  <text x="308" y="516" class="small">probes egress every</text>
+  <text x="308" y="534" class="small">10s through ziti0</text>
+  <rect x="308" y="546" width="176" height="26" rx="6" fill="#231a08" stroke="#7a5c12"/>
+  <text x="396" y="564" text-anchor="middle" class="amber" font-size="11" font-weight="700">FAIL OPEN -> direct</text>
+
+  <!-- boot guard -->
+  <rect x="511" y="400" width="207" height="182" rx="10" class="card"/>
+  <text x="527" y="424" class="box">boot guard</text>
+  <text x="527" y="442" class="small">preflight before start</text>
+  <text x="527" y="462" class="small">controller reachable?</text>
+  <text x="527" y="480" class="small">no -> don't start,</text>
+  <text x="527" y="498" class="small">stay on direct</text>
+  <text x="527" y="516" class="small">pins all controllers</text>
+  <text x="527" y="534" class="small">in /etc/hosts</text>
+  <rect x="527" y="546" width="176" height="26" rx="6" fill="#0e2a16" stroke="#2f6b34"/>
+  <text x="615" y="564" text-anchor="middle" class="green" font-size="11" font-weight="700">never black-hole</text>
+
+  <!-- ============ OVERLAY ============ -->
+  <text x="800" y="120" class="zone">OPENZITI OVERLAY</text>
+  <rect x="780" y="132" width="150" height="200" rx="14" fill="url(#overlay)" stroke="#1f5d5a" stroke-width="1.5"/>
+  <text x="798" y="162" class="box">Controller</text>
+  <text x="798" y="182" class="small">+ edge router</text>
+  <text x="798" y="204" class="small">(AWS)</text>
+  <line x1="798" y1="220" x2="912" y2="220" stroke="#1f5d5a"/>
+  <text x="798" y="244" class="small">TLS over the</text>
+  <text x="798" y="262" class="small">remote wifi</text>
+  <text x="798" y="280" class="small">underlay</text>
+  <text x="798" y="308" class="teal" font-size="11.5" font-weight="600">attribute policies</text>
+
+  <!-- ============ EXIT ============ -->
+  <text x="800" y="392" class="zone">EXIT (home or cloud)</text>
+  <rect x="780" y="404" width="360" height="198" rx="14" class="card"/>
+  <text x="798" y="434" class="box">host.v1 exit endpoint</text>
+  <text x="798" y="456" class="small">opens its own sockets to the original dst</text>
+  <text x="798" y="474" class="small">self-NATs -- no ip_forward / New-NetNat needed</text>
+  <line x1="798" y1="488" x2="1122" y2="488" stroke="#26406e"/>
+  <text x="798" y="512" class="zone">HOME LAN</text>
+  <rect x="798" y="524" width="150" height="60" rx="8" fill="#0e1b30" stroke="#26406e"/>
+  <text x="812" y="548" class="box" font-size="13">pi-hole</text>
+  <text x="812" y="568" class="small">192.168.1.5 (DNS)</text>
+  <rect x="962" y="524" width="160" height="60" rx="8" fill="#0e1b30" stroke="#26406e"/>
+  <text x="976" y="548" class="box" font-size="13">NAS / devices</text>
+  <text x="976" y="568" class="small">home ISP public IP</text>
+
+  <!-- ============ PIPES ============ -->
+  <!-- client -> router -->
+  <path class="pipe" d="M190,215 H262" marker-end="url(#arrow)"/>
+  <text x="196" y="206" class="lbl">wifi</text>
+  <!-- router ZET -> overlay -->
+  <path class="pipe" d="M718,320 C755,320 760,230 776,230" marker-end="url(#arrow)"/>
+  <text x="726" y="270" class="lbl">ziti0</text>
+  <!-- overlay -> exit -->
+  <path class="pipe" d="M855,332 V400" marker-end="url(#arrow)"/>
+  <!-- exit -> internet -->
+  <path class="pipe" d="M1042,584 V626 H1042" marker-end="url(#arrow)"/>
+  <text x="1050" y="616" class="lbl">internet, from home</text>
+
+  <!-- DNS forward pipe: dnsmasq -> ZET resolver -->
+  <path class="pipe-dim" d="M505,204 C540,204 545,300 545,300" marker-end="url(#arrow)"/>
+  <text x="430" y="196" class="lbl" fill="#8aa0c2">ziti domains only</text>
+
+  <!-- fail-open pipe: guard -> direct WAN -->
+  <path class="pipe-dim" d="M396,572 C396,640 210,640 210,282" marker-end="url(#arrowdim)"/>
+  <text x="250" y="662" class="lbl" fill="#8aa0c2">on failure: restore lan-&gt;wan, flush /1 routes, keep the wifi online</text>
+
+  <!-- ============ LEGEND ============ -->
+  <rect x="40" y="632" width="196" height="66" rx="8" fill="#0e1b30" stroke="#26406e"/>
+  <line x1="54" y1="652" x2="86" y2="652" class="pipe"/>
+  <text x="94" y="656" class="small">tunneled path (overlay)</text>
+  <line x1="54" y1="676" x2="86" y2="676" class="pipe-dim"/>
+  <text x="94" y="680" class="small">direct / fail-open path</text>
+
+  <text x="1140" y="52" text-anchor="end" class="sub">v1.18.1  |  IPv4-only  |  TCP + UDP (no ICMP)</text>
+</svg>

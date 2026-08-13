@@ -43,10 +43,18 @@ start_service() {
 		return 0
 	}
 
-	# Refuse to start with zero identities -- ZET would exit and trigger
-	# the procd respawn loop. User must enroll first via LuCI or CLI.
-	if [ -z "$(ls "$IDENTITY_DIR"/*.json 2>/dev/null)" ]; then
-		logger -t ziti "no .json files under $IDENTITY_DIR; not starting (enroll an identity first)"
+	# Refuse to start with zero ENROLLED identities -- ZET would exit and trigger
+	# the procd respawn loop. config.json is ZET's own runtime state, not an
+	# identity, so it must not count (else a fresh device with only config.json
+	# would start into the respawn loop). Mirrors the rpcd enumeration logic.
+	local have_id=0 idf
+	for idf in "$IDENTITY_DIR"/*.json; do
+		[ -e "$idf" ] || continue
+		[ "$(basename "$idf")" = "config.json" ] && continue
+		have_id=1; break
+	done
+	if [ "$have_id" = 0 ]; then
+		logger -t ziti "no enrolled identities under $IDENTITY_DIR; not starting (enroll one first)"
 		return 0
 	fi
 
@@ -71,8 +79,13 @@ start_service() {
 		--verbose "$v"
 	# Optional: forward non-Ziti-service DNS to this resolver (e.g. a home
 	# pi-hole reached over the tunnel). Only affects names in the Ziti domains
-	# dnsmasq hands to ZET; general DNS never touches this.
-	[ -n "$dns_upstream" ] && procd_append_param command --dns-upstream "$dns_upstream"
+	# dnsmasq hands to ZET; general DNS never touches this. Only pass it if it
+	# looks like an IP -- a stray value starting with '-' would be misparsed as a
+	# flag and stop ZET from starting.
+	case "$dns_upstream" in
+		[0-9]*.[0-9]*.[0-9]*.[0-9]*) procd_append_param command --dns-upstream "$dns_upstream" ;;
+		?*) logger -t ziti "ignoring non-IP dns_upstream '$dns_upstream'" ;;
+	esac
 	procd_set_param respawn 3600 5 0
 	procd_set_param stdout 1
 	procd_set_param stderr 1

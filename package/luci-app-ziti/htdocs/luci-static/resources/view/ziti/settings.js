@@ -6,8 +6,9 @@
 'require rpc';
 'require ui';
 'require dom';
+'require zitibuild';
 
-var UI_BUILD = 'ui 20260812-175409';
+var UI_BUILD = zitibuild.BUILD;
 
 var callCheck = rpc.declare({
 	object: 'ziti', method: 'check_update', expect: { }
