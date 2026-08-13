@@ -1,0 +1,5 @@
+{
+  "generated": "2026-08-13T16:42:08Z",
+  "base_url": "https://openziti.github.io/ziti-openwrt",
+  "targets": [{"name":"aarch64_cortex-a53","package_count":4,"signed":true},{"name":"aarch64_cortex-a53_neon-vfpv4","package_count":4,"signed":true},{"name":"arm_cortex-a7_neon-vfpv4","package_count":3,"signed":true},{"name":"mipsel_24kc","package_count":3,"signed":true},{"name":"x86_64","package_count":4,"signed":true}]
+}

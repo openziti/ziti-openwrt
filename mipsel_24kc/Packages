@@ -1,0 +1,56 @@
+Package: llhttp9
+Version: 9.4.1-1
+Depends: libc
+Provides: llhttp
+Source: /feed/llhttp
+SourceName: llhttp
+License: MIT
+LicenseFiles: LICENSE-MIT
+Section: libs
+SourceDateEpoch: 1727094886
+ABIVersion: 9
+Maintainer: openwrt-openziti contributors
+Architecture: mipsel_24kc
+Installed-Size: 17043
+Description:  HTTP/1.1 parser (nodejs/llhttp)
+Filename: llhttp9_9.4.1-1_mipsel_24kc.ipk
+Size: 17819
+SHA256sum: d8ff1118cb7d98a3318c3eeb42ee6a0130f5bf850d4a161446896adb2b431e84
+
+Package: luci-app-ziti
+Version: 0.1.0-3
+Depends: libc, luci-base, ziti-edge-tunnel
+Source: /feed/luci-app-ziti
+SourceName: luci-app-ziti
+License: Apache-2.0
+Section: luci
+SourceDateEpoch: 1727094886
+Maintainer: openwrt-openziti contributors
+Architecture: all
+Installed-Size: 12733
+Description:  LuCI web UI for managing OpenZiti identities, enrollment via JWT, and the
+ ziti-edge-tunnel service on OpenWRT.
+Filename: luci-app-ziti_0.1.0-3_all.ipk
+Size: 13542
+SHA256sum: f08bf906f18e3cedb78d9f6b11053a33767736ed1763c9d8dbfb86f713b70d46
+
+Package: ziti-edge-tunnel
+Version: 1.18.1-4
+Depends: libc, libuv1, libopenssl3, zlib, libjson-c5, libsodium, libprotobuf-c, libpcap1, llhttp9, libatomic1, kmod-tun, ip-full, ca-bundle
+Source: /feed/ziti-edge-tunnel
+SourceName: ziti-edge-tunnel
+License: Apache-2.0
+LicenseFiles: LICENSE
+Section: net
+SourceDateEpoch: 1727094886
+Maintainer: OpenZiti contributors <developers@openziti.org>
+Architecture: mipsel_24kc
+Installed-Size: 361554
+Description:  ziti-edge-tunnel is the C tunneler from openziti/ziti-tunnel-sdk-c.
+ It hosts and dials OpenZiti services and exposes them locally via a tun
+ device, providing transparent zero-trust connectivity. State and enrolled
+ identities live under /etc/ziti/ on overlay so they survive reboots.
+Filename: ziti-edge-tunnel_1.18.1-4_mipsel_24kc.ipk
+Size: 362314
+SHA256sum: 15060558a00db62aac5de8e101c142d3963c13cbd3ab9df1dee7ece3de8181f2
+
