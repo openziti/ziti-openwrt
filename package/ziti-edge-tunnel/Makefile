@@ -7,14 +7,14 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ziti-edge-tunnel
-PKG_VERSION:=1.18.1
-PKG_RELEASE:=4
+PKG_VERSION:=1.18.7
+PKG_RELEASE:=1
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openziti/ziti-tunnel-sdk-c/tar.gz/refs/tags/v$(PKG_VERSION)?
 PKG_SOURCE_SUBDIR:=ziti-tunnel-sdk-c-$(PKG_VERSION)
 # sha256 of the codeload source tarball at refs/tags/v$(PKG_VERSION).
-PKG_HASH:=9f780b7d46da7467941f800966a39a634b65b02bc36bfb953ffd3784ca6659ff
+PKG_HASH:=13a35444abcd63d5ca8fedfbf3a0e5e9b14c050a9d19904af93131f006c164cc
 
 PKG_MAINTAINER:=OpenZiti contributors <developers@openziti.org>
 PKG_LICENSE:=Apache-2.0
