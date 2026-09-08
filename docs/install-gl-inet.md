@@ -258,14 +258,82 @@ Notes:
   concatenating two version args at build time. The binary is fine.
 - Log line "local 'ziti' group not found" appears at startup; ZET disables its IPC socket server in response.
   Without that socket, `ziti-edge-tunnel tunnel_status` and the LuCI Status tab's live-status RPC do not work.
-  Service-level status (running / stopped) is still reported correctly. A future package update will create
-  the `ziti` group at install time. Until then, you can add it manually:
+  Service-level status (running / stopped) is still reported correctly. The package `postinst` now creates the
+  `ziti` group (first free gid at or above 900), so this should not appear on a fresh install. If it does, add
+  the group manually:
 
   ```sh
   # BusyBox lacks groupadd; append directly.
-  echo 'ziti:x:600:' >> /etc/group
+  echo 'ziti:x:900:' >> /etc/group
   /etc/init.d/ziti-edge-tunnel restart
   ```
+
+## Recovering after a GL firmware upgrade
+
+A GL.iNet firmware upgrade (or any OpenWRT `sysupgrade`) reflashes the root filesystem and discards `/overlay`,
+where opkg-installed packages live. OpenZiti will look like it vanished: no `/usr/bin/ziti-edge-tunnel`, no
+`/etc/init.d/ziti-edge-tunnel`, no LuCI tab, no `ziti0` interface.
+
+Your configuration and, importantly, your **enrolled identities** survive, because they live under `/etc`, which a
+keep-settings upgrade preserves. Verified surviving a GL 4.9.2 upgrade on a GL-BE3600:
+
+| Survives | Lost |
+|---|---|
+| `/etc/ziti/identities/*.json` (enrollment intact, no re-enroll) | `/usr/bin/ziti-edge-tunnel` |
+| `/etc/config/ziti`, `/etc/config/ziti-router` | `/etc/init.d/ziti-edge-tunnel`, `/etc/init.d/ziti-guard` |
+| the openziti feed line in `/etc/opkg/customfeeds.conf` | `/usr/libexec/rpcd/ziti` and the LuCI views |
+| the feed signing key under `/etc/opkg/keys/` | `/usr/libexec/ziti-boot-guard` |
+| firewall `ziti` zone + `lan` -> `ziti` forwarding | the installed-package records themselves |
+| dnsmasq per-domain `server=` lines and `notinterface ziti0` | |
+
+Because the feed line and its signing key both survive, recovery is a reinstall, not a re-setup:
+
+```sh
+# 1. Back up the surviving UCI. The package record is gone, so /etc/config/ziti is no longer a tracked
+#    conffile and opkg is free to replace it.
+cp /etc/config/ziti /root/ziti.uci.bak
+
+# 2. Reinstall. Pulls libsodium, libprotobuf-c and llhttp9 as needed; the rest is already in the firmware.
+opkg update
+opkg install ziti-edge-tunnel luci-app-ziti
+
+# 3. rpcd only scans /usr/libexec/rpcd/ at startup, so it has not seen the freshly installed backend.
+#    Without this the LuCI tabs render but every call fails with: RPC call to ziti/status failed with
+#    error -32000: Object not found
+/etc/init.d/rpcd restart
+rm -f /tmp/luci-indexcache.*.json
+rm -rf /tmp/luci-modulecache
+
+# 4. Confirm the backend is registered, then hard-reload the LuCI page.
+ubus list | grep ziti
+ubus call ziti status
+```
+
+In practice opkg notices the differing conffile and parks the packaged copy at `/etc/config/ziti-opkg` rather than
+overwriting yours, but take the backup anyway. If your settings did get replaced, restore with
+`cp /root/ziti.uci.bak /etc/config/ziti` followed by `/etc/init.d/ziti-edge-tunnel restart`.
+
+`postinst` enables and starts `ziti-guard` on its own, and if `/etc/config/ziti` has `enabled 1` the guard starts
+ZET, so the tunnel can come back up without an explicit start. Check `ubus call ziti status` rather than assuming.
+
+Note that the reinstall relinks against whatever libraries the new firmware ships, which is the point. Do not try
+to preserve the binaries across the upgrade by listing them in `/etc/sysupgrade.conf`: ZET is dynamically linked,
+and carrying it onto a rootfs with a bumped `libopenssl` or `libuv` gives you a binary that fails to load or, worse,
+loads and misbehaves. Reinstalling from the feed is the supported path.
+
+### Where the LuCI UI actually lives on GL firmware
+
+GL's own nginx owns `:80` and `:443` and serves `/cgi-bin/` through `fcgiwrap` (see `location /cgi-bin/` in
+`/etc/nginx/conf.d/gl.conf`), so LuCI is reachable on the normal port even though the nginx config never mentions
+LuCI by name. uhttpd also listens directly:
+
+```
+http://192.168.8.1/cgi-bin/luci            # via GL's nginx + fcgiwrap
+http://192.168.8.1:8080/cgi-bin/luci       # uhttpd directly
+https://192.168.8.1:8443/cgi-bin/luci      # uhttpd, TLS
+```
+
+The OpenZiti tabs are under **Services -> OpenZiti**.
 
 ## Uninstalling
 
