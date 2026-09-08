@@ -415,3 +415,92 @@ forwarding (masq); split = only named services intercepted, no forced default ro
 manual steps proven here (stage firewall zone + forwarding, then start ZET) are exactly what the toggle should
 automate -- with the incident's lesson baked in: never leave a wildcard intercept live without the forwarding rule,
 and give a one-click OFF that stops ZET and drops the zone/forwarding.
+
+## Incident 3: GL firmware upgrade wiped the packages (recovered, no re-enrollment)
+
+Upgraded the GL-BE3600 to GL 4.9.2 (OpenWrt 23.05-SNAPSHOT, ipq53xx, kernel 5.4.213, arch
+`aarch64_cortex-a53_neon-vfpv4`, `libopenssl3` 3.0.13). Afterwards OpenZiti presented as gone: no
+`/usr/bin/ziti-edge-tunnel`, no `/etc/init.d/ziti-edge-tunnel`, no `ziti-guard`, no LuCI tab, no `ziti0`, and
+`opkg list-installed | grep ziti` empty. Nothing was corrupt. `sysupgrade` reflashes the rootfs and discards
+`/overlay`, and opkg packages live in `/overlay`.
+
+Everything under `/etc` survived, which is what made this cheap:
+
+- `/etc/ziti/identities/travel-router-01.json` plus `config.json` -- enrollment intact
+- `/etc/config/ziti` (`enabled 1`, `ziti_dns_domains` = `ziti` + `parkplace-via-dhcp`, `dns_upstream 192.168.1.5`)
+  and `/etc/config/ziti-router`
+- firewall `ziti` zone on device `ziti0`, and the `lan` -> `ziti` forwarding (so the staging the first incident
+  demands was still in place)
+- dnsmasq `server=/ziti/100.64.0.2`, `server=/parkplace-via-dhcp/100.64.0.2`, `notinterface ziti0`
+- the `src/gz openziti .../aarch64_cortex-a53_neon-vfpv4` line in `/etc/opkg/customfeeds.conf` AND the feed
+  signing key in `/etc/opkg/keys/`
+
+Recovery, with the feed and key intact, was a reinstall:
+
+```sh
+cp /etc/config/ziti /root/ziti.uci.bak     # package record gone, so it is no longer a tracked conffile
+opkg update
+opkg install ziti-edge-tunnel luci-app-ziti
+```
+
+Pulled `ziti-edge-tunnel 1.18.1-4`, `luci-app-ziti 0.1.0-3`, plus `libsodium`, `libprotobuf-c`, `llhttp9`; the rest
+of the dep list was already in the firmware. opkg noticed the differing conffile and parked the packaged copy at
+`/etc/config/ziti-opkg` rather than overwriting ours. `postinst` created the `ziti` group (gid 900) and
+enabled+started `ziti-guard`, and since UCI had `enabled 1` the guard brought ZET up on its own. The identity was
+loaded as-is, the edge router `ip-172-31-47-200-edge-router` connected, and all three services returned. No
+enrollment step, no JWT, no controller-side work.
+
+Two things to know for next time:
+
+- **Do not try to make the binaries survive.** Listing them in `/etc/sysupgrade.conf` works mechanically and is a
+  trap, because ZET is dynamically linked: carry it onto a rootfs with a bumped `libopenssl` or `libuv` and it fails
+  to load or misbehaves. The reinstall relinking against the new firmware's libraries is the feature. The durable
+  version of this would be a first-boot self-heal that reinstalls from the feed (and optionally a cached `.ipk`
+  under `/etc/` for the no-internet-at-boot case), not file preservation.
+- **rpcd needs a restart after the install.** rpcd scans `/usr/libexec/rpcd/` only at startup, so the freshly
+  installed `ziti` backend was invisible: `ubus list` had no `ziti` object, the LuCI tabs rendered fine, and every
+  call failed with `RPC call to ziti/status failed with error -32000: Object not found`. `/etc/init.d/rpcd restart`
+  plus `rm -f /tmp/luci-indexcache.*` fixed it; `ubus call ziti status` then returned real data. Worth doing in
+  `postinst`, the way `ziti-guard` already is.
+
+Side note that cost time: LuCI on this firmware IS on `:80`. GL's nginx serves `/cgi-bin/` via `fcgiwrap`
+(`location /cgi-bin/` in `/etc/nginx/conf.d/gl.conf`), but the nginx config never contains the string "luci", so
+grepping for `luci` under `/etc/nginx/` finds nothing and suggests uhttpd's `:8080`/`:8443` are the only way in.
+
+## Incident 4: SSH to the controller host is not tunneled (by design), and that breaks IP allowlists
+
+Symptom, from a laptop behind the travel router on a foreign uplink (`sta1`, 192.168.20.157 via 192.168.20.1):
+`ssh` to the AWS box timed out (dropped, not refused), while everything else worked and `curl ifconfig.me` returned
+the home exit IP, proving the full-tunnel exit path was healthy. The obvious read was the wildcard-intercept
+black-hole from Incident 1. It was the opposite problem.
+
+```
+ip route get 3.18.113.172   ->  via 192.168.20.1 dev sta1 src 192.168.20.157    # /32 bypass, DIRECT
+ip route get 1.1.1.1        ->  dev ziti0 src 100.64.0.1                        # tunneled
+```
+
+The main table carried an explicit `3.18.113.172 via 192.168.20.1 dev sta1 metric 20` alongside the `0.0.0.0/1` and
+`128.0.0.0/1` routes on `ziti0`. ZET pins a `/32` bypass for every controller address so its own control channel
+cannot be swallowed by its own wildcard intercept -- exactly the wedge Incident 2 describes. Correct behavior.
+
+The catch is that the SSH target and the controller are the same EC2 host. SSH therefore inherited the bypass, left
+via the current uplink with the foreign public source address (209.51.184.106), and the security group -- which
+permits SSH only from the home IP -- dropped it. Hence a connect timeout that looks like a black-hole but is a
+firewall on the far side. Confirmed by the asymmetry: `:8441` to that same host answered fine (also bypassed, also
+direct, but the controller API is open to the world), while `:22` did not.
+
+- Forcing the controller `/32` into `ziti0` would fix SSH and wedge the control channel. Not an option.
+- The fix is to dial by NAME. Name-based `intercept.v1` addresses are not subject to the `/32` bypass, so a service
+  on a Ziti-only name, hosted `host.v1` at `127.0.0.1:22` on that box (the same shape as the existing `glinet.ssh`
+  service), rides the overlay and terminates on the host itself. No security-group change at all, since the
+  connection never arrives from an internet address. Set up controller-side; `:8441` stays reachable for
+  `ziti edge login` even while SSH is not.
+
+Diagnostic lesson: this is a routing question and `ip route get <ip>` answers it in one line. The log actively
+misled -- `on_tcp_client_err() ... err=-14, terminating connection` (lwIP `ERR_RST`) appeared 369 times and was
+entirely the watchdog's own probe connections to `1.1.1.1:443`, unrelated to the SSH failure.
+
+Also surfaced while checking this: `ubus call ziti status` reports `guard_state: "preflight: split mode, no gate"`
+while `internet-exit-svc` is intercepting `0.0.0.0/1` + `128.0.0.0/1`. The guard infers mode from UCI rather than
+from the intercepts actually installed on `ziti0`, so a full-tunnel service handed down by the controller leaves the
+watchdog un-gated. Mode detection should read the live `ziti0` routes.

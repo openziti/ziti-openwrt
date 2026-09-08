@@ -184,10 +184,46 @@ path falls open to plain direct internet; fail-closed is only ever the result of
 - Proven live from the cowork facility: a home name resolved via the home pi-hole over the tunnel to its home LAN IP;
   a Ziti service name resolved to a synthetic `100.64.x`; a public name resolved via dnsmasq's default (unaffected).
 
+### Controller addresses are bypassed, so anything co-located on the controller host is NOT tunneled
+
+Observed live on a GL-BE3600 with a full-tunnel `internet-exit-svc` (`0.0.0.0/1` + `128.0.0.0/1`, tcp+udp, ports
+1-65535) whose exit is at home. SSH to the controller host timed out while all other egress worked and showed the
+home exit IP. The cause is not a black-hole:
+
+```
+ip route get 3.18.113.172   ->  via 192.168.20.1 dev sta1     # explicit /32 bypass, direct out the uplink
+ip route get 1.1.1.1        ->  dev ziti0 src 100.64.0.1      # everything else tunnels
+```
+
+ZET installs a `/32` bypass route for every controller address so its own control channel cannot be swallowed by
+its own wildcard intercept. That is the anti-wedge behavior the buildlog asks for, and it is correct. The
+consequence is easy to miss: **any other service reachable at a controller's IP inherits the bypass.** Traffic to
+it leaves via the current uplink, with the current uplink's public source address, not through the overlay exit.
+
+This bites hardest with source-IP allowlists. An AWS security group that permits SSH only from a home IP will drop
+those connections while roaming, because the bypass means the packets never reach the home exit. Symptom is a
+plain connect timeout.
+
+- Do NOT "fix" this by forcing the controller `/32` into `ziti0`. SSH would work and the control channel would
+  wedge, which is the failure the bypass exists to prevent.
+- The fix is to dial by NAME instead of by IP. Name-based `intercept.v1` addresses are not subject to the `/32`
+  bypass, so a service on a Ziti-only name (hosted `host.v1` at `127.0.0.1:22` on the target box, the same shape as
+  the `glinet.ssh` service this repo already uses) rides the overlay and terminates on the box itself. No
+  security-group change is needed at all, since the connection never arrives from an internet address.
+- Diagnosing this is a routing question, not a log question. `ip route get <ip>` answers it in one line. Note that
+  `on_tcp_client_err ... err=-14` lines (lwIP `ERR_RST`) are NOT evidence for it; on this device they appear
+  continuously as background noise from the watchdog's own probe connections.
+
 ## Deferred (not blocking first build)
 
 - Live per-identity controller / connection status in LuCI (needs ZET IPC
   socket integration). Today only service-level status is shown.
+- `ziti-guard` reports `split mode, no gate` while a service intercepts `0.0.0.0/1` + `128.0.0.0/1`. The guard
+  infers mode from UCI rather than from the intercepts actually installed on `ziti0`, so a full-tunnel service
+  handed down from the controller leaves the guard un-gated. Mode detection should read the live `ziti0` routes.
+- rpcd does not pick up `/usr/libexec/rpcd/ziti` on install, because it only scans that directory at startup. The
+  LuCI tabs then render but every call returns `-32000: Object not found`. `postinst` should
+  `/etc/init.d/rpcd restart` (and drop `/tmp/luci-indexcache.*`) the way it already handles `ziti-guard`.
 - `.pot` translation extraction for LuCI app.
 - `logread` tab in LuCI.
 - aarch64 on-device validation. Stream E's QEMU harness covers x86_64 only;

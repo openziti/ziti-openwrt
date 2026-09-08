@@ -250,6 +250,55 @@ v1.15.1 against musl on 23.05.5:
 -Dunofficial-sodium_DIR=$(PKG_BUILD_DIR)/.cmake-shims/unofficial-sodium
 ```
 
+## A firmware upgrade looks exactly like an uninstall
+
+A GL 4.9.2 upgrade on the live GL-BE3600 presented as "OpenZiti disappeared": no binary, no init scripts, no LuCI
+tab, no `ziti0`. Nothing was corrupt. `sysupgrade` reflashes the root filesystem and discards `/overlay`, and every
+opkg-installed package lives in `/overlay` by definition.
+
+What made recovery a two-minute job rather than a rebuild is that everything under `/etc` came through untouched:
+the enrolled identity JSON, `/etc/config/ziti`, the firewall `ziti` zone and its `lan` -> `ziti` forwarding, the
+dnsmasq per-domain `server=` lines, and, decisively, the feed line in `/etc/opkg/customfeeds.conf` together with its
+signing key in `/etc/opkg/keys/`. With the feed and key intact, `opkg update && opkg install ziti-edge-tunnel
+luci-app-ziti` restored the box, and the identity was simply picked up again. No enrollment.
+
+Two lessons worth carrying:
+
+- **Do not try to preserve the binaries.** Listing `/usr/bin/ziti-edge-tunnel` in `/etc/sysupgrade.conf` works
+  mechanically and is a trap: ZET is dynamically linked, so carrying it onto a rootfs with a bumped `libopenssl` or
+  `libuv` yields a binary that fails to load, or loads and misbehaves. Reinstalling relinks against whatever the new
+  firmware ships, which is what you want. The durable form of this is a first-boot self-heal that reinstalls from
+  the feed, not file preservation.
+- **rpcd needs a kick after install.** rpcd scans `/usr/libexec/rpcd/` only at startup, so a backend installed
+  afterwards is invisible. The LuCI tabs render normally and then every call fails with
+  `RPC call to ziti/status failed with error -32000: Object not found`. That error text means "rpcd has not loaded
+  the plugin", not "the app is broken". `/etc/init.d/rpcd restart` plus clearing `/tmp/luci-indexcache.*` fixes it.
+
+A related time sink: chasing the UI on the wrong port. GL's nginx owns `:80` and serves `/cgi-bin/` via `fcgiwrap`,
+so LuCI is on the normal port, but the nginx config never mentions LuCI by name. Grepping for `luci` under
+`/etc/nginx/` finds nothing and invites the wrong conclusion that LuCI is only on uhttpd's `:8080`/`:8443`. Grep for
+`location` and `fastcgi_pass` instead.
+
+## The controller's bypass route quietly un-tunnels anything sharing its IP
+
+With a full-tunnel exit service live, SSH to one specific host timed out while all other traffic egressed correctly
+through the home exit. The instinct was the wildcard-intercept black-hole again. It was the opposite:
+
+```
+ip route get 3.18.113.172   ->  via 192.168.20.1 dev sta1     # /32 bypass, direct
+ip route get 1.1.1.1        ->  dev ziti0                     # tunneled
+```
+
+ZET pins a `/32` bypass for each controller address so the control channel cannot be eaten by its own intercept.
+The host in question was both the controller and the SSH target, so SSH inherited the bypass, left via the current
+uplink, and was dropped by a security group that only allows the home IP. Working as designed, wrong outcome.
+
+The general rule: with a wildcard intercept, a controller's IP is the one address that is guaranteed NOT to be
+tunneled. Reach co-located services by Ziti name instead, since name-based intercepts are unaffected by the bypass.
+And when the overlay "drops" one destination, run `ip route get` before reading a single log line. In this case the
+log was actively misleading: `on_tcp_client_err ... err=-14` (lwIP `ERR_RST`) appeared hundreds of times and had
+nothing to do with the failure -- it was the watchdog's own probe connections.
+
 ## Outstanding TODOs (post-build)
 
 - Smoke-test the produced .ipk in QEMU (Stream E from earlier; wired up
